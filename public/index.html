@@ -322,7 +322,8 @@ function matrix(cols) {
       row('출력 속도', (x) => x.summary.outTokPerSec, { rank: 'high', cls: 'meta', fmt: (v) => `${v}토큰/초` }),
       row('호출당 입력량', (x) => x.summary.avgInputTokens, { rank: 'low', cls: 'meta', fmt: (v) => `${v.toLocaleString()}토큰` }),
       row('비용 추정(정가)', (x) => x.summary.costUsd, { rank: 'low', cls: 'meta', fmt: (v) => `$${v.toFixed(3)}` }),
-      row('실패한 과제', (x) => x.summary.failures, { cls: 'meta', fmt: (v) => `${v}개` }))));
+      row('실패한 과제', (x) => x.summary.failures, { cls: 'meta', fmt: (v) => `${v}개` }),
+      cols.some((c) => c.summary.timeouts) ? row('제한 시간 초과', (x) => x.summary.timeouts ?? 0, { cls: 'meta', fmt: (v) => `${v}개` }) : null)));
 }
 
 // ----- board -----
@@ -332,7 +333,21 @@ document.querySelectorAll('#board-mode button').forEach((b) => b.addEventListene
 document.querySelectorAll('#board-tier button').forEach((b) => b.addEventListener('click', () => {
   boardTier = b.dataset.tier; document.querySelectorAll('#board-tier button').forEach((x) => x.setAttribute('aria-pressed', x === b)); loadBoard();
 }));
+// Demanding tier is shown per task, because its tasks are few and each one is a result in its own right.
+async function loadLongBoard() {
+  const rows = (await api('/api/board-long')).filter((r) => r.mode === boardMode);
+  const order = CFG.models.map((m) => m.key); rows.sort((a, b) => order.indexOf(a.baseKey) - order.indexOf(b.baseKey) || CFG.efforts.indexOf(a.effort) - CFG.efforts.indexOf(b.effort));
+  if (!rows.length) { $('#board').replaceChildren(el('p', { class: 'note' }, `${MODE[boardMode]} 기준으로 완료된 고난도 측정이 아직 없습니다.`)); $('#recs').replaceChildren(el('p', { class: 'note' }, '고난도 측정 결과가 쌓이면 여기에 요약이 표시됩니다.')); return; }
+  const tasks = CFG.tasks.filter((t) => t.long);
+  const cell = (r, t) => { const x = r.tasks[t.id]; if (!x) return el('td', {}, '-'); const td = el('td', { class: 'cell' }, `${Math.round(x.score)}`, el('small', { style: 'display:block;color:var(--sub);font-weight:400' }, `${x.range ? `${x.range[0]}~${x.range[1]} · ${x.n}회 · ` : ''}${x.sec >= 60 ? Math.round(x.sec / 60) + '분' : x.sec + '초'}${x.timeouts ? ' · 시간 초과' : ''}`)); td.style.background = `rgba(var(--tint),${(0.04 + 0.26 * (x.score / 100)).toFixed(3)})`; return td; };
+  $('#board').replaceChildren(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, el('th', {}, '고난도 과제'), rows.map((r) => el('th', {}, r.label)))),
+    el('tbody', {}, tasks.map((t) => el('tr', {}, el('td', {}, t.title), rows.map((r) => cell(r, t))))))),
+    el('p', { class: 'note' }, '칸 아래의 작은 글씨는 점수 범위와 측정 횟수, 걸린 시간입니다. "시간 초과"는 제한 시간 20분을 넘겨 그때까지 폴더에 남긴 결과로 채점했다는 뜻입니다.'));
+  $('#recs').replaceChildren(el('p', { class: 'note' }, '결함 수정과 결함 검토는 정답이 있는 과제이고, 일정 최적화는 정답이 없어 풀이의 품질로 점수가 갈리는 과제입니다. 정답이 있는 과제에서 점수가 같다면 걸린 시간을 비교하세요.'));
+}
 async function loadBoard() {
+  if (boardTier === 'long') return loadLongBoard();
   const all = await api('/api/board'); const rows = all.filter((r) => r.mode === boardMode && (r.tier || 'short') === boardTier);
   const order = CFG.models.map((m) => m.key); rows.sort((a, b) => order.indexOf(a.baseKey) - order.indexOf(b.baseKey) || CFG.efforts.indexOf(a.effort) - CFG.efforts.indexOf(b.effort));
   $('#board').replaceChildren(rows.length ? matrix(rows.map((r) => ({ label: r.label, sub: `${DEPTH[r.depth]} · ${when(r.measuredAt)}`, summary: r.summary }))) : el('p', { class: 'note' }, `${MODE[boardMode]} 기준으로 완료된 측정이 아직 없습니다. 측정 탭에서 먼저 측정하세요.`));

@@ -28,7 +28,8 @@ export function summarize(model) {
     if (xs.length) cats[c.id] = round1(mean(xs));
   }
   const catVals = Object.values(cats);
-  const answered = done.filter((t) => t.kind === 'ok');
+  // A work-folder task graded after a timeout still took real time, so it counts toward the time figures.
+  const answered = done.filter((t) => t.kind === 'ok' || t.graded);
   const secs = answered.map((t) => t.ms / 1000);
   const outTok = answered.reduce((a, t) => a + (t.outTokens || 0), 0);
   const totalSec = secs.reduce((a, b) => a + b, 0);
@@ -39,7 +40,7 @@ export function summarize(model) {
     outTokPerSec: totalSec > 0 ? round1(outTok / totalSec) : null,
     costUsd: costs.length ? Math.round(costs.reduce((a, b) => a + b, 0) * 1000) / 1000 : null,
     avgInputTokens: answered.length ? Math.round(mean(answered.map((t) => t.inTokens || 0))) : null,
-    completed: done.length, failures: done.filter((t) => t.kind !== 'ok').length,
+    completed: done.length, failures: done.filter((t) => t.kind !== 'ok' && !t.graded).length, timeouts: done.filter((t) => t.kind === 'timeout').length,
   };
 }
 
@@ -76,6 +77,8 @@ async function runModel(run, model, tasks, signal) {
       let det;
       try { det = await task.score(r.text || '', r.workFiles || {}); if (r.kind !== 'ok') det.detail = `${r.error}. 폴더에 남은 결과로 채점: ${det.detail}`; } catch (e) { det = { score: 0, detail: `채점 중 오류: ${String(e && e.message).slice(0, 120)}` }; }
       rec.detail = det.detail; rec.detScore = det.score;
+      if (det.raw !== undefined) rec.raw = det.raw; // raw objective values, so results can be rescored later
+      if (r.kind !== 'ok') rec.graded = true;
       if (det.svg !== undefined) rec.svg = det.svg.slice(0, 20000);
       if (task.judge) {
         const j = await judgeWork(task, r.text, run.judges, signal);
@@ -182,6 +185,34 @@ async function board() {
   return [...best.values()];
 }
 
+// Demanding tier, per task: for each (model, effort, mode) and task, the most recent run that measured it.
+// Repeats inside that run are folded into a median and a range. Partial runs (chosen task ids) count here.
+async function longBoard() {
+  const longIds = tasksFor('long').map((t) => t.id); const rows = new Map();
+  for (const run of await loadRuns()) { // newest first
+    if (run.depth !== 'long') continue;
+    const groups = new Map();
+    for (const m of run.models) {
+      const gk = `${m.baseKey || m.key}@${m.effort || 'default'}`;
+      if (!groups.has(gk)) groups.set(gk, []);
+      groups.get(gk).push(m);
+    }
+    for (const [gk, members] of groups) {
+      const rk = `${gk}|${run.mode}`;
+      if (!rows.has(rk)) rows.set(rk, { key: gk, baseKey: members[0].baseKey || members[0].key, effort: members[0].effort || 'default', label: members[0].label.replace(/ · \d+회차$/, ''), provider: members[0].provider, mode: run.mode, tasks: {} });
+      const row = rows.get(rk);
+      for (const id of longIds) {
+        if (row.tasks[id]) continue;
+        const recs = members.map((m) => m.tasks[id]).filter((t) => t && typeof t.score === 'number');
+        if (!recs.length) continue;
+        const scores = recs.map((t) => t.score); const costs = recs.map((t) => t.costUsd).filter((v) => typeof v === 'number');
+        row.tasks[id] = { score: round1(median(scores)), range: recs.length > 1 ? [Math.min(...scores), Math.max(...scores)] : null, n: recs.length, sec: Math.round(median(recs.map((t) => t.ms / 1000))), timeouts: recs.filter((t) => t.kind === 'timeout').length, costUsd: costs.length === recs.length ? Math.round(median(costs) * 100) / 100 : null, measuredAt: run.finishedAt || run.startedAt };
+      }
+    }
+  }
+  return [...rows.values()].filter((r) => Object.keys(r.tasks).length);
+}
+
 // ---------- http ----------
 const send = (res, code, body, type = 'application/json; charset=utf-8') => {
   res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
@@ -217,6 +248,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/current') return send(res, 200, current ? light(current.run) : null);
     if (url.pathname === '/api/board') return send(res, 200, await board());
+    if (url.pathname === '/api/board-long') return send(res, 200, await longBoard());
     if (url.pathname === '/api/runs') return send(res, 200, (await loadRuns()).map((r) => ({ id: r.id, startedAt: r.startedAt, finishedAt: r.finishedAt, depth: r.depth, mode: r.mode, status: r.status, models: r.models.map((m) => ({ key: m.key, label: m.label, status: m.status, overall: m.summary && m.summary.overall })) })));
     const m = /^\/api\/runs\/([\w-]+)$/.exec(url.pathname);
     if (m) {
