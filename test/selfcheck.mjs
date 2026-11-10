@@ -4,7 +4,11 @@ import { TASKS, CATEGORIES, tasksFor } from '../lib/bank.mjs';
 import { P3_OPT } from '../lib/tasks.mjs';
 import { SHIFT_STATS, PUZZLE } from '../lib/tasks-hard.mjs';
 import { extractJson, extractCode } from '../lib/util.mjs';
-import { runTests } from '../lib/sandbox.mjs';
+import { runTests, sandboxCommand, makeSandboxDir } from '../lib/sandbox.mjs';
+import { spawnSync } from 'node:child_process';
+import { writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import net from 'node:net';
 
 let fail = 0;
 const check = (ok, msg) => { if (!ok) { fail++; console.log('FAIL', msg); } };
@@ -35,6 +39,26 @@ const esc2 = await runTests(`function f(){ return process.binding('fs') ? 1 : 0;
 check(esc2.passed === 0, '샌드박스: 내부 바인딩 접근이 막히지 않음');
 const loop = await runTests('function f(){ while(true){} }', 'f', [{ args: [], expect: 1 }], 1500);
 check(loop.passed === 0 && /timeout/.test(loop.detail), '샌드박스: 무한 반복 중단 실패');
+
+// Sandbox: forged result lines and early exits must not earn points.
+const forge = await runTests(`function f(){ process.stdout.write('{"results":[true]}\\n'); process.exit(0); }`, 'f', [{ args: [], expect: 1 }]);
+check(forge.passed === 0, '샌드박스: 가짜 결과 출력으로 점수 획득');
+const forge2 = await runTests(`function f(){ console.log(JSON.stringify({results:[true]})); return 0; }`, 'f', [{ args: [], expect: 1 }]);
+check(forge2.passed === 0, '샌드박스: 결과 줄 위조로 점수 획득');
+// Sandbox: network access must be blocked. A local listener counts connections from the sandboxed child.
+{
+  let hits = 0;
+  const srv = net.createServer((sock) => { hits++; sock.destroy(); });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const dir = await makeSandboxDir();
+  const script = join(dir, 'net.mjs');
+  writeFileSync(script, `import net from 'node:net'; const s = net.connect(${srv.address().port}, '127.0.0.1'); s.on('connect', () => { console.log('connected'); s.destroy(); }); s.on('error', (e) => console.log('blocked', e.code)); setTimeout(() => process.exit(0), 1500);`);
+  const [cmd, ...argv] = sandboxCommand(dir, script);
+  const r = spawnSync(cmd, argv, { env: {}, encoding: 'utf8', timeout: 8000 });
+  check(hits === 0 && !/connected/.test(r.stdout), `샌드박스: 네트워크 접속이 막히지 않음 (${(r.stdout + r.stderr).trim().slice(0, 80)})`);
+  console.log(`  네트워크 차단 확인: ${(r.stdout + r.stderr).trim().split('\n')[0].slice(0, 60)}`);
+  rmSync(dir, { recursive: true, force: true }); srv.close();
+}
 
 // Extraction.
 check(extractJson('설명\n```json\n{"a":1}\n```\n끝').a === 1, 'JSON 코드블록 추출');
