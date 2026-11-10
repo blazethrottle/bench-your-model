@@ -14,18 +14,47 @@ let fail = 0;
 const check = (ok, msg) => { if (!ok) { fail++; console.log('FAIL', msg); } };
 
 for (const t of TASKS) {
-  const good = await t.score(t.ref);
+  const good = await t.score(t.ref, t.refFiles || {});
   check(good.score === 100, `${t.id} 기준 답안 점수 ${good.score} (${good.detail})`);
   for (const junk of ['모르겠습니다.', '', '```json\n{}\n```', '```js\nfunction x(){}\n```']) {
-    const bad = await t.score(junk);
+    const bad = await t.score(junk, t.files || {});
     check(bad.score <= 20, `${t.id} 무의미한 답 "${junk.slice(0, 12)}" 점수 ${bad.score}`);
   }
   check(typeof t.prompt === 'string' && t.prompt.length > 50, `${t.id} 프롬프트`);
   check(CATEGORIES.some((c) => c.id === t.cat), `${t.id} 분류`);
 }
 
+// Algorithm set: a brute-force answer must pass the small cases and fail the large ones (about half marks).
+{
+  const { BRUTE } = await import('../lib/tasks-long.mjs');
+  const t = TASKS.find((x) => x.id === 'coding-5');
+  const naive = '```js\n' + Object.keys(BRUTE).map((k) => 'function ' + BRUTE[k].toString()).join('\n') + '\n```';
+  const t0 = Date.now(); const r = await t.score(naive);
+  check(r.score >= 45 && r.score <= 55, `coding-5 단순 풀이 점수 ${r.score} (기대 50 안팎) ${r.detail}`);
+  console.log(`  coding-5 단순 풀이 점수: ${r.score} (${Math.round((Date.now() - t0) / 1000)}초) ${r.detail}`);
+}
+
+// Project tasks: every seeded defect must be detectable on its own, and the untouched fixture must score 0.
+{
+  const { buildFixCases, PROJECT_INFO } = await import('../lib/tasks-project.mjs');
+  const b = await buildFixCases();
+  const counts = PROJECT_INFO.FIX_BUGS.map((x) => `${x.id}:${b.isolating[x.id].length}`).join(' ');
+  check(PROJECT_INFO.FIX_BUGS.every((x) => b.isolating[x.id].length >= 3), `debug-5 결함별 판별 사례 부족 (${counts})`);
+  check(b.regression.length >= 10, `debug-5 기존 동작 확인 사례 ${b.regression.length}개`);
+  console.log(`  debug-5 숨은 호출 ${b.calls.length}개, 결함별 판별 사례 ${counts}, 기존 동작 확인 ${b.regression.length}개`);
+  const fix = TASKS.find((x) => x.id === 'debug-5');
+  const untouched = await fix.score('', fix.files);
+  check(untouched.score === 0, `debug-5 손대지 않은 상태 점수 ${untouched.score}`);
+  const broken = await fix.score('', { ...fix.refFiles, 'src/report.mjs': 'export function buildSummary() { return {}; }' });
+  check(broken.score <= 5, `debug-5 기존 동작을 망가뜨린 답 점수 ${broken.score}`);
+  const review = TASKS.find((x) => x.id === 'debug-6');
+  const spray = await review.score(JSON.stringify({ defects: Array.from({ length: 20 }, (_, i) => ({ file: 'src/orders.mjs', line: 5 + i * 8 })) }));
+  check(spray.score <= 25, `debug-6 줄 번호 난사 점수 ${spray.score} (${spray.detail})`);
+  console.log(`  debug-6 결함 위치: ${PROJECT_INFO.REVIEW_BUGS.map((x) => `${x.id}@${x.file.replace('src/', '')}:${PROJECT_INFO.reviewSeed.lines[x.id]}`).join(' ')}`);
+}
+
 // Debug tasks: the buggy code quoted in the prompt must not pass.
-for (const t of TASKS.filter((x) => x.cat === 'debug')) {
+for (const t of TASKS.filter((x) => x.cat === 'debug' && !x.files)) {
   const buggy = /```js\n([\s\S]*?)```/.exec(t.prompt)[1];
   const r = await t.score('```js\n' + buggy + '\n```');
   check(r.score < 100, `${t.id} 버그 원본이 만점 (${r.score})`);
@@ -82,6 +111,7 @@ check(bad.score === 0, `planning-1 규칙 위반 점수 ${bad.score}`);
 check(PUZZLE.length === 1, `논리 문제의 해가 ${PUZZLE.length}개 (유일해야 함)`);
 check(SHIFT_STATS.count >= 5 && SHIFT_STATS.best.v > SHIFT_STATS.worst.v, `근무 배정: 가능한 해 ${SHIFT_STATS.count}개`);
 check(tasksFor('quick').every(Boolean) && tasksFor('quick').length === CATEGORIES.length, '빠른 측정 과제 구성');
+check(tasksFor('long').length >= 1 && tasksFor('full').every((t) => !t.long), '고난도 측정 과제 구성');
 console.log(`논리 문제 해 ${PUZZLE.length}개, 근무 배정 가능한 해 ${SHIFT_STATS.count}개 (선호 합계 ${SHIFT_STATS.worst.v}~${SHIFT_STATS.best.v})`);
 console.log(`과제 ${TASKS.length}개, 빠른 측정 ${tasksFor('quick').length}개, 예산 문제 최적값 ${P3_OPT.v} (${P3_OPT.sel.join(',')})`);
 console.log(fail ? `실패 ${fail}건` : '자체 검증 전부 통과');

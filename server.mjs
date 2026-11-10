@@ -4,7 +4,7 @@ import { readFile, writeFile, mkdir, readdir, rename } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CATEGORIES, tasksFor } from './lib/bank.mjs';
+import { CATEGORIES, TASKS, tasksFor } from './lib/bank.mjs';
 import { ask, probe, BIN } from './lib/providers.mjs';
 import { judgeWork } from './lib/judge.mjs';
 import { mean, median, round1 } from './lib/util.mjs';
@@ -57,7 +57,7 @@ async function runModel(run, model, tasks, signal) {
   for (const task of tasks) {
     if (signal.aborted) { model.status = 'aborted'; break; }
     model.currentTask = task.id;
-    const r = await ask({ provider: model.provider, model: model.model, behavesAs: model.behavesAs, effort: model.effort === 'default' ? undefined : model.effort, prompt: task.prompt, mode: run.mode, timeoutMs, signal });
+    const r = await ask({ provider: model.provider, model: model.model, behavesAs: model.behavesAs, effort: model.effort === 'default' ? undefined : model.effort, prompt: task.prompt, mode: run.mode, files: task.files, collect: !!task.files, timeoutMs: task.timeoutSec ? task.timeoutSec * 1000 : timeoutMs, signal });
     if (r.kind === 'aborted') { model.status = 'aborted'; break; }
     if (r.kind === 'limit' || r.kind === 'setup') { model.status = r.kind; model.error = r.error; break; }
     // Two failed calls in a row means the model or effort level is not usable; stop instead of recording zeros.
@@ -65,13 +65,16 @@ async function runModel(run, model, tasks, signal) {
     if (streak >= 2) { model.status = 'error'; model.error = r.error; delete model.tasks[tasks[tasks.indexOf(task) - 1].id]; break; }
     const rec = {
       cat: task.cat, title: task.title, kind: r.kind, ms: r.ms, inTokens: r.inTokens ?? null, outTokens: r.outTokens ?? null,
-      costUsd: r.costUsd ?? null, servedBy: r.servedBy || [], error: r.error || null, answer: (r.text || '').slice(0, 20000),
+      costUsd: r.costUsd ?? null, servedBy: r.servedBy || [], error: r.error || null, answer: (r.text || '').slice(0, 60000),
+      turns: r.turns ?? null, denials: r.denials || [],
     };
-    if (r.kind !== 'ok') {
+    // A work-folder task that ran out of time is still graded on what it left in the folder.
+    const gradable = r.kind === 'ok' || (task.files && r.kind === 'timeout' && r.workFiles);
+    if (!gradable) {
       Object.assign(rec, { score: 0, detail: r.error || '응답 실패' });
     } else {
       let det;
-      try { det = await task.score(r.text); } catch (e) { det = { score: 0, detail: `채점 중 오류: ${String(e && e.message).slice(0, 120)}` }; }
+      try { det = await task.score(r.text || '', r.workFiles || {}); if (r.kind !== 'ok') det.detail = `${r.error}. 폴더에 남은 결과로 채점: ${det.detail}`; } catch (e) { det = { score: 0, detail: `채점 중 오류: ${String(e && e.message).slice(0, 120)}` }; }
       rec.detail = det.detail; rec.detScore = det.score;
       if (det.svg !== undefined) rec.svg = det.svg.slice(0, 20000);
       if (task.judge) {
@@ -92,7 +95,7 @@ async function runModel(run, model, tasks, signal) {
 }
 
 async function execute(run, signal) {
-  const tasks = tasksFor(run.depth);
+  const tasks = run.onlyTasks ? TASKS.filter((t) => run.onlyTasks.includes(t.id)) : tasksFor(run.depth);
   run.taskIds = tasks.map((t) => t.id);
   // Environment fingerprint: what the harness adds before any task text.
   const providers = [...new Set(run.models.map((m) => m.provider))];
@@ -113,14 +116,17 @@ function startRun(body) {
   const keys = Array.isArray(body.models) ? [...new Set(body.models.map(String))] : [];
   const models = keys.map((k) => MODELS.get(k)).filter(Boolean);
   if (!models.length) throw Object.assign(new Error('측정할 모델을 하나 이상 고르세요.'), { code: 400 });
-  const depth = body.depth === 'full' ? 'full' : 'quick';
+  const depth = ['full', 'long'].includes(body.depth) ? body.depth : 'quick';
+  // Calibration helpers (API only): run chosen task ids, and repeat each model to see run-to-run spread.
+  const onlyTasks = Array.isArray(body.taskIds) ? body.taskIds.map(String).filter((id) => TASKS.some((t) => t.id === id)) : null;
+  const repeat = Math.min(3, Math.max(1, Number(body.repeat) || 1));
   const mode = body.mode === 'isolated' ? 'isolated' : 'asused';
   const efforts = (Array.isArray(body.efforts) ? [...new Set(body.efforts.map(String))] : ['default']).filter((e) => EFFORTS.includes(e));
   if (!efforts.length) efforts.push('default');
-  const variants = models.flatMap((m) => efforts.map((e) => ({ ...m, key: `${keyOf(m)}@${e}`, baseKey: keyOf(m), effort: e, label: e === 'default' ? m.label : `${m.label} · ${e}` })));
+  const variants = models.flatMap((m) => efforts.flatMap((e) => Array.from({ length: repeat }, (_, i) => ({ ...m, key: `${keyOf(m)}@${e}${repeat > 1 ? `#${i + 1}` : ''}`, baseKey: keyOf(m), effort: e, label: `${m.label}${e === 'default' ? '' : ` · ${e}`}${repeat > 1 ? ` · ${i + 1}회차` : ''}` }))));
   const run = {
     id: new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '-' + Math.random().toString(36).slice(2, 6),
-    startedAt: new Date().toISOString(), finishedAt: null, depth, mode, status: 'running', env: {}, judges: CONFIG.judges, taskIds: [],
+    startedAt: new Date().toISOString(), finishedAt: null, depth, mode, onlyTasks: onlyTasks && onlyTasks.length ? onlyTasks : null, calibration: repeat > 1 || !!(onlyTasks && onlyTasks.length), status: 'running', env: {}, judges: CONFIG.judges, taskIds: [],
     models: variants.map((m) => ({ ...m, status: 'pending', currentTask: null, error: null, tasks: {}, summary: null })),
   };
   const abort = new AbortController();
@@ -145,9 +151,9 @@ async function board() {
   const best = new Map();
   for (const run of await loadRuns()) {
     for (const m of run.models) {
-      if (m.status !== 'done' || !m.summary || m.summary.overall === null) continue;
-      const k = `${m.key}|${run.mode}`; const prev = best.get(k);
-      const cand = { key: m.key, baseKey: m.baseKey || m.key, effort: m.effort || 'default', label: m.label, provider: m.provider, mode: run.mode, depth: run.depth, runId: run.id, measuredAt: run.finishedAt || run.startedAt, env: run.env[m.provider] || null, summary: m.summary };
+      if (run.calibration || m.status !== 'done' || !m.summary || m.summary.overall === null) continue;
+      const k = `${m.key}|${run.mode}|${run.depth === 'long' ? 'long' : 'short'}`; const prev = best.get(k);
+      const cand = { key: m.key, baseKey: m.baseKey || m.key, effort: m.effort || 'default', label: m.label, provider: m.provider, mode: run.mode, depth: run.depth, tier: run.depth === 'long' ? 'long' : 'short', runId: run.id, measuredAt: run.finishedAt || run.startedAt, env: run.env[m.provider] || null, summary: m.summary };
       if (!prev || (prev.depth === 'quick' && run.depth === 'full')) best.set(k, cand);
     }
   }
@@ -183,8 +189,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/config') {
       return send(res, 200, {
         categories: CATEGORIES, models: CONFIG.models.map((m) => ({ ...m, key: keyOf(m), available: !!BIN[m.provider] })), judges: CONFIG.judges, efforts: EFFORTS,
-        counts: { quick: tasksFor('quick').length, full: tasksFor('full').length },
-        tasks: tasksFor('full').map((t) => ({ id: t.id, cat: t.cat, title: t.title, judged: !!t.judge })),
+        counts: { quick: tasksFor('quick').length, full: tasksFor('full').length, long: tasksFor('long').length },
+        tasks: TASKS.map((t) => ({ id: t.id, cat: t.cat, title: t.title, judged: !!t.judge, long: !!t.long })),
       });
     }
     if (url.pathname === '/api/current') return send(res, 200, current ? light(current.run) : null);

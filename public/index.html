@@ -137,6 +137,10 @@ img.svg{max-width:260px;background:#fff;border:1px solid var(--line);border-radi
       <button data-mode="asused" aria-pressed="true">실사용 환경</button>
       <button data-mode="isolated" aria-pressed="false">순수 모델</button>
     </div>
+    <div class="seg" id="board-tier">
+      <button data-tier="short" aria-pressed="true">일반 과제</button>
+      <button data-tier="long" aria-pressed="false">고난도 과제</button>
+    </div>
     <div id="board"></div>
   </div>
   <div class="card"><h2>작업별 추천</h2><div id="recs"></div></div>
@@ -188,8 +192,8 @@ const fmt = (v, unit = '') => (v === null || v === undefined ? '측정 안 됨' 
 const when = (iso) => (iso ? new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 const STATUS = { pending: '대기', running: '측정 중', done: '완료', limit: '사용량 한도로 중단', setup: '도구를 찾지 못함', error: '오류', aborted: '중단됨' };
 const MODE = { asused: '실사용 환경', isolated: '순수 모델' };
-const DEPTH = { quick: '빠른 측정', full: '정밀 측정' };
-let CFG = null, pollTimer = null, boardMode = 'asused';
+const DEPTH = { quick: '빠른 측정', full: '정밀 측정', long: '고난도 측정' };
+let CFG = null, pollTimer = null, boardMode = 'asused', boardTier = 'short';
 
 // ----- tabs -----
 document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
@@ -210,7 +214,7 @@ function selected() {
 }
 function updateEstimate() {
   const s = selected(); const n = CFG.counts[s.depth];
-  const judged = CFG.tasks.filter((t) => t.judged).length; const judgedN = s.depth === 'full' ? judged : new Set(CFG.tasks.filter((t) => t.judged).map((t) => t.cat)).size;
+  const judged = CFG.tasks.filter((t) => t.judged).length; const judgedN = s.depth === 'long' ? CFG.tasks.filter((t) => t.judged && t.long).length : s.depth === 'full' ? judged : new Set(CFG.tasks.filter((t) => t.judged).map((t) => t.cat)).size;
   const combos = s.models.length * s.efforts.length;
   const calls = combos * (n + judgedN * CFG.judges.length);
   $('#estimate').textContent = combos ? `모델 ${s.models.length}개 × 강도 ${s.efforts.length}개 × 과제 ${n}개, 심사 포함 약 ${calls}회 호출` : '모델과 추론 강도를 하나 이상 고르세요';
@@ -227,7 +231,8 @@ async function init() {
   for (const e of CFG.efforts) $('#efforts').append(el('label', { class: 'opt' }, el('input', { type: 'checkbox', name: 'effort', value: e, checked: e === 'default', onchange: updateEstimate }), el('span', {}, e === 'default' ? '기본값' : e, el('small', {}, EFFORT_NOTE[e] || ''))));
   $('#depth').append(
     el('label', { class: 'opt' }, el('input', { type: 'radio', name: 'depth', value: 'quick', checked: true, onchange: updateEstimate }), el('span', {}, '빠른 측정', el('small', {}, `분류당 1개, 총 ${CFG.counts.quick}개 과제`))),
-    el('label', { class: 'opt' }, el('input', { type: 'radio', name: 'depth', value: 'full', onchange: updateEstimate }), el('span', {}, '정밀 측정', el('small', {}, `전체 ${CFG.counts.full}개 과제`))));
+    el('label', { class: 'opt' }, el('input', { type: 'radio', name: 'depth', value: 'full', onchange: updateEstimate }), el('span', {}, '정밀 측정', el('small', {}, `짧은 과제 전체 ${CFG.counts.full}개`))),
+    el('label', { class: 'opt' }, el('input', { type: 'radio', name: 'depth', value: 'long', onchange: updateEstimate }), el('span', {}, '고난도 측정', el('small', {}, `긴 작업 ${CFG.counts.long}개, 과제당 수 분`))));
   $('#method-cats').append(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, '분류'), el('th', { style: 'text-align:left' }, '재는 것'))),
     el('tbody', {}, CFG.categories.map((c) => el('tr', {}, el('td', {}, c.name), el('td', { style: 'text-align:left;white-space:normal' }, c.desc))))));
   updateEstimate();
@@ -314,8 +319,11 @@ function matrix(cols) {
 document.querySelectorAll('#board-mode button').forEach((b) => b.addEventListener('click', () => {
   boardMode = b.dataset.mode; document.querySelectorAll('#board-mode button').forEach((x) => x.setAttribute('aria-pressed', x === b)); loadBoard();
 }));
+document.querySelectorAll('#board-tier button').forEach((b) => b.addEventListener('click', () => {
+  boardTier = b.dataset.tier; document.querySelectorAll('#board-tier button').forEach((x) => x.setAttribute('aria-pressed', x === b)); loadBoard();
+}));
 async function loadBoard() {
-  const all = await api('/api/board'); const rows = all.filter((r) => r.mode === boardMode);
+  const all = await api('/api/board'); const rows = all.filter((r) => r.mode === boardMode && (r.tier || 'short') === boardTier);
   const order = CFG.models.map((m) => m.key); rows.sort((a, b) => order.indexOf(a.baseKey) - order.indexOf(b.baseKey) || CFG.efforts.indexOf(a.effort) - CFG.efforts.indexOf(b.effort));
   $('#board').replaceChildren(rows.length ? matrix(rows.map((r) => ({ label: r.label, sub: `${DEPTH[r.depth]} · ${when(r.measuredAt)}`, summary: r.summary }))) : el('p', { class: 'note' }, `${MODE[boardMode]} 기준으로 완료된 측정이 아직 없습니다. 측정 탭에서 먼저 측정하세요.`));
   const recs = el('ul', { class: 'rec' });
