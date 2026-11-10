@@ -126,7 +126,7 @@ function startRun(body) {
   const variants = models.flatMap((m) => efforts.flatMap((e) => Array.from({ length: repeat }, (_, i) => ({ ...m, key: `${keyOf(m)}@${e}${repeat > 1 ? `#${i + 1}` : ''}`, baseKey: keyOf(m), effort: e, label: `${m.label}${e === 'default' ? '' : ` · ${e}`}${repeat > 1 ? ` · ${i + 1}회차` : ''}` }))));
   const run = {
     id: new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '-' + Math.random().toString(36).slice(2, 6),
-    startedAt: new Date().toISOString(), finishedAt: null, depth, mode, onlyTasks: onlyTasks && onlyTasks.length ? onlyTasks : null, calibration: repeat > 1 || !!(onlyTasks && onlyTasks.length), status: 'running', env: {}, judges: CONFIG.judges, taskIds: [],
+    startedAt: new Date().toISOString(), finishedAt: null, depth, mode, onlyTasks: onlyTasks && onlyTasks.length ? onlyTasks : null, repeat, status: 'running', env: {}, judges: CONFIG.judges, taskIds: [],
     models: variants.map((m) => ({ ...m, status: 'pending', currentTask: null, error: null, tasks: {}, summary: null })),
   };
   const abort = new AbortController();
@@ -146,12 +146,34 @@ async function loadRuns() {
   return runs;
 }
 
+// Repeats of one model in one run are folded into a single entry: the median of each figure, plus the score range.
+function foldRepeats(models) {
+  const med = (xs) => { const v = xs.filter((x) => typeof x === 'number'); return v.length ? round1(median(v)) : null; };
+  const s = models.map((m) => m.summary);
+  const cats = {};
+  for (const c of CATEGORIES) { const v = med(s.map((x) => x.cats[c.id])); if (v !== null) cats[c.id] = v; }
+  const overalls = s.map((x) => x.overall).filter((x) => typeof x === 'number');
+  return {
+    cats, overall: med(s.map((x) => x.overall)), medianSec: med(s.map((x) => x.medianSec)), outTokPerSec: med(s.map((x) => x.outTokPerSec)),
+    costUsd: med(s.map((x) => x.costUsd)), avgInputTokens: med(s.map((x) => x.avgInputTokens)), completed: med(s.map((x) => x.completed)), failures: med(s.map((x) => x.failures)),
+    repeats: models.length, overallRange: overalls.length > 1 ? [Math.min(...overalls), Math.max(...overalls)] : null,
+  };
+}
+
 // Board = for each (model, mode) the most recent measurement that finished; full runs win over quick runs.
 async function board() {
   const best = new Map();
   for (const run of await loadRuns()) {
+    if (run.onlyTasks) continue; // partial task sets are calibration, not results
+    const groups = new Map();
     for (const m of run.models) {
-      if (run.calibration || m.status !== 'done' || !m.summary || m.summary.overall === null) continue;
+      if (m.status !== 'done' || !m.summary || m.summary.overall === null) continue;
+      const gk = `${m.baseKey || m.key}@${m.effort || 'default'}`;
+      if (!groups.has(gk)) groups.set(gk, []);
+      groups.get(gk).push(m);
+    }
+    for (const [gk, members] of groups) {
+      const m = { ...members[0], key: gk, label: members[0].label.replace(/ · \d+회차$/, ''), summary: members.length > 1 ? foldRepeats(members) : members[0].summary };
       const k = `${m.key}|${run.mode}|${run.depth === 'long' ? 'long' : 'short'}`; const prev = best.get(k);
       const cand = { key: m.key, baseKey: m.baseKey || m.key, effort: m.effort || 'default', label: m.label, provider: m.provider, mode: run.mode, depth: run.depth, tier: run.depth === 'long' ? 'long' : 'short', runId: run.id, measuredAt: run.finishedAt || run.startedAt, env: run.env[m.provider] || null, summary: m.summary };
       if (!prev || (prev.depth === 'quick' && run.depth === 'full')) best.set(k, cand);

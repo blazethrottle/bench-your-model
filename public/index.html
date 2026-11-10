@@ -91,6 +91,11 @@ img.svg{max-width:260px;background:#fff;border:1px solid var(--line);border-radi
         <h3>Grok 구독</h3><div class="opts" id="models-grok"></div>
         <h3>추론 강도 (여러 개를 고르면 강도별로 따로 측정)</h3>
         <div class="opts" id="efforts"></div>
+        <h3>반복 횟수</h3>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="repeat" value="1" checked><span>1회<small>빠르지만 흔들림을 알 수 없음</small></span></label>
+          <label class="opt"><input type="radio" name="repeat" value="3"><span>3회<small>중앙값과 점수 범위를 표시</small></span></label>
+        </div>
         <h3>측정 깊이</h3>
         <div class="opts" id="depth"></div>
         <h3>측정 환경</h3>
@@ -162,6 +167,8 @@ img.svg{max-width:260px;background:#fff;border:1px solid var(--line);border-radi
     <p>형식과 제약은 규칙으로 검사하고, 품질은 Claude 모델 하나와 Grok 모델 하나가 작성자를 모르는 상태로 채점한 값의 평균을 씁니다. 두 진영의 심사자를 함께 쓰는 이유는 한쪽 심사자가 자기 진영의 글을 선호할 가능성을 상쇄하기 위해서입니다.</p>
     <h3>이 측정의 한계</h3>
     <ul>
+      <li>정답이 있는 과제는 가장 가벼운 모델도 대부분 만점을 받습니다. 빠른 측정과 정밀 측정에서는 점수보다 응답 시간, 입력량, 비용의 차이를 보세요. 모델 간 품질 차이는 고난도 측정, 그중에서도 정답이 없는 최적화 과제에서 드러납니다.</li>
+      <li>고난도 측정은 과제당 최대 20분이 걸리고 사용량을 많이 씁니다. 제한 시간을 넘기면 그때까지 작업 폴더에 남긴 결과로 채점하며, 글로 답하는 과제는 0점이 됩니다.</li>
       <li>과제 수가 적습니다(빠른 측정은 분류당 1개, 정밀 측정은 2~3개). 점수 차이가 10점 안쪽이면 우열로 읽지 마세요. 같은 측정을 다시 하면 점수가 달라질 수 있습니다.</li>
       <li>실사용 환경 점수는 지침, 스킬, 도구 설정을 바꾸면 달라집니다. 그래서 측정마다 당시 환경의 기본 입력 토큰 수를 함께 기록합니다.</li>
       <li>웹 검색으로 최신 정보를 찾는 능력은 재지 않습니다. 검색 결과가 시점마다 달라 같은 기준을 적용할 수 없기 때문입니다. 리서치 분류는 주어진 자료를 분석하는 능력만 잽니다.</li>
@@ -209,15 +216,16 @@ function selected() {
     models: [...document.querySelectorAll('input[name=model]:checked')].map((i) => i.value),
     efforts: [...document.querySelectorAll('input[name=effort]:checked')].map((i) => i.value),
     depth: document.querySelector('input[name=depth]:checked').value,
+    repeat: Number(document.querySelector('input[name=repeat]:checked').value),
     mode: document.querySelector('input[name=mode]:checked').value,
   };
 }
 function updateEstimate() {
   const s = selected(); const n = CFG.counts[s.depth];
   const judged = CFG.tasks.filter((t) => t.judged).length; const judgedN = s.depth === 'long' ? CFG.tasks.filter((t) => t.judged && t.long).length : s.depth === 'full' ? judged : new Set(CFG.tasks.filter((t) => t.judged).map((t) => t.cat)).size;
-  const combos = s.models.length * s.efforts.length;
+  const combos = s.models.length * s.efforts.length * s.repeat;
   const calls = combos * (n + judgedN * CFG.judges.length);
-  $('#estimate').textContent = combos ? `모델 ${s.models.length}개 × 강도 ${s.efforts.length}개 × 과제 ${n}개, 심사 포함 약 ${calls}회 호출` : '모델과 추론 강도를 하나 이상 고르세요';
+  $('#estimate').textContent = combos ? `모델 ${s.models.length}개 × 강도 ${s.efforts.length}개 × ${s.repeat}회 × 과제 ${n}개, 심사 포함 약 ${calls}회 호출` : '모델과 추론 강도를 하나 이상 고르세요';
   $('#go').disabled = !combos || !!pollTimer;
 }
 async function init() {
@@ -235,6 +243,7 @@ async function init() {
     el('label', { class: 'opt' }, el('input', { type: 'radio', name: 'depth', value: 'long', onchange: updateEstimate }), el('span', {}, '고난도 측정', el('small', {}, `긴 작업 ${CFG.counts.long}개, 과제당 수 분`))));
   $('#method-cats').append(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, '분류'), el('th', { style: 'text-align:left' }, '재는 것'))),
     el('tbody', {}, CFG.categories.map((c) => el('tr', {}, el('td', {}, c.name), el('td', { style: 'text-align:left;white-space:normal' }, c.desc))))));
+  document.querySelectorAll('input[name=repeat]').forEach((i) => i.addEventListener('change', updateEstimate));
   updateEstimate();
   const cur = await api('/api/current');
   if (cur) { renderRun(cur); if (cur.status === 'running') startPolling(); }
@@ -308,6 +317,7 @@ function matrix(cols) {
     el('tbody', {},
       CFG.categories.map((c) => row(c.name, (x) => x.summary.cats[c.id] ?? null, { rank: 'high', tint: true, fmt: (v) => Math.round(v) })),
       row('종합', (x) => x.summary.overall, { rank: 'high', cls: 'total', fmt: (v) => v.toFixed(1) }),
+      cols.some((c) => c.summary.overallRange) ? row('종합 점수 범위', (x) => (x.summary.overallRange ? `${x.summary.overallRange[0]}~${x.summary.overallRange[1]} (${x.summary.repeats}회)` : null), { cls: 'meta' }) : null,
       row('응답 시간(중앙값)', (x) => x.summary.medianSec, { rank: 'low', cls: 'meta', fmt: (v) => `${v}초` }),
       row('출력 속도', (x) => x.summary.outTokPerSec, { rank: 'high', cls: 'meta', fmt: (v) => `${v}토큰/초` }),
       row('호출당 입력량', (x) => x.summary.avgInputTokens, { rank: 'low', cls: 'meta', fmt: (v) => `${v.toLocaleString()}토큰` }),

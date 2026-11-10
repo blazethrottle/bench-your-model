@@ -14,7 +14,7 @@ let fail = 0;
 const check = (ok, msg) => { if (!ok) { fail++; console.log('FAIL', msg); } };
 
 for (const t of TASKS) {
-  const good = await t.score(t.ref, t.refFiles || {});
+  const good = t.openEnded ? { score: 100 } : await t.score(t.ref, t.refFiles || {});
   check(good.score === 100, `${t.id} 기준 답안 점수 ${good.score} (${good.detail})`);
   for (const junk of ['모르겠습니다.', '', '```json\n{}\n```', '```js\nfunction x(){}\n```']) {
     const bad = await t.score(junk, t.files || {});
@@ -51,6 +51,25 @@ for (const t of TASKS) {
   const spray = await review.score(JSON.stringify({ defects: Array.from({ length: 20 }, (_, i) => ({ file: 'src/orders.mjs', line: 5 + i * 8 })) }));
   check(spray.score <= 25, `debug-6 줄 번호 난사 점수 ${spray.score} (${spray.detail})`);
   console.log(`  debug-6 결함 위치: ${PROJECT_INFO.REVIEW_BUGS.map((x) => `${x.id}@${x.file.replace('src/', '')}:${PROJECT_INFO.reviewSeed.lines[x.id]}`).join(' ')}`);
+}
+
+// Open-ended task: the starter scores 0, a decent solver lands in between, slow or invalid solvers score 0.
+{
+  const { OPEN_INFO } = await import('../lib/tasks-open.mjs');
+  const { referenceSolve } = await import('../lib/sched.mjs');
+  const { mulberry32 } = await import('../lib/util.mjs');
+  const t = TASKS.find((x) => x.id === 'planning-5');
+  check(OPEN_INFO.hasBest(), 'planning-5 기준선 파일 없음 (node tools/build-sched-best.mjs 실행 필요)');
+  const lib = 'const mulberry32 = ' + mulberry32.toString() + ';\n' + referenceSolve.toString() + '\n';
+  const starter = await t.score('', OPEN_INFO.files);
+  check(starter.score === 0, `planning-5 처음 상태 점수 ${starter.score}`);
+  const decent = await t.score('', { 'solver.mjs': lib + 'export function solve(inst) { return referenceSolve(inst, 1200); }' });
+  check(decent.score >= 30 && decent.score < 100, `planning-5 기준 풀이(1.2초) 점수 ${decent.score}`);
+  const slow = await t.score('', { 'solver.mjs': lib + 'export function solve(inst) { return referenceSolve(inst, 3500); }' });
+  check(slow.score === 0, `planning-5 제한 시간 초과 풀이 점수 ${slow.score}`);
+  const invalid = await t.score('', { 'solver.mjs': 'export function solve(inst) { return inst.jobs.map(() => []).slice(0, inst.machines); }' });
+  check(invalid.score === 0, `planning-5 무효 일정 점수 ${invalid.score}`);
+  console.log(`  planning-5 처음 상태 ${starter.score}점, 기준 풀이(1.2초) ${decent.score}점 [${decent.detail.split(' · ')[0]}], 시간 초과 ${slow.score}점, 무효 ${invalid.score}점`);
 }
 
 // Debug tasks: the buggy code quoted in the prompt must not pass.
