@@ -67,6 +67,8 @@ for (const t of TASKS) {
   check(decent.score >= 30 && decent.score < 100, `planning-5 기준 풀이(1.2초) 점수 ${decent.score}`);
   const slow = await t.score('', { 'solver.mjs': lib + 'export function solve(inst) { return referenceSolve(inst, 3500); }' });
   check(slow.score === 0, `planning-5 제한 시간 초과 풀이 점수 ${slow.score}`);
+  const sneaky = await t.score('', { 'solver.mjs': lib + 'export function solve(inst) { return { toJSON() { return referenceSolve(inst, 3500); } }; }' });
+  check(sneaky.score === 0, `planning-5 변환 단계에 계산을 숨긴 풀이 점수 ${sneaky.score}`);
   const invalid = await t.score('', { 'solver.mjs': 'export function solve(inst) { return inst.jobs.map(() => []).slice(0, inst.machines); }' });
   check(invalid.score === 0, `planning-5 무효 일정 점수 ${invalid.score}`);
   console.log(`  planning-5 처음 상태 ${starter.score}점, 기준 풀이(1.2초) ${decent.score}점 [${decent.detail.split(' · ')[0]}], 시간 초과 ${slow.score}점, 무효 ${invalid.score}점`);
