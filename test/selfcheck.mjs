@@ -45,6 +45,11 @@ const forge = await runTests(`function f(){ process.stdout.write('{"results":[tr
 check(forge.passed === 0, '샌드박스: 가짜 결과 출력으로 점수 획득');
 const forge2 = await runTests(`function f(){ console.log(JSON.stringify({results:[true]})); return 0; }`, 'f', [{ args: [], expect: 1 }]);
 check(forge2.passed === 0, '샌드박스: 결과 줄 위조로 점수 획득');
+// Sandbox: redefining built-ins used for grading must not earn points (comparison happens outside the child).
+const hijack = await runTests(`JSON.stringify = () => '1'; Array.prototype.map = function () { return [true, true]; }; Object.keys = () => []; function f(){ return 999; }`, 'f', [{ args: [], expect: 1 }, { args: [], expect: [2] }]);
+check(hijack.passed === 0, `샌드박스: 내장 함수 바꿔치기로 점수 획득 (${hijack.passed}/2)`);
+const hijack2 = await runTests(`function f(){ return { toJSON(){ return 1; } }; }`, 'f', [{ args: [], expect: 2 }]);
+check(hijack2.passed === 0, '샌드박스: toJSON 조작으로 점수 획득');
 // Sandbox: network access must be blocked. A local listener counts connections from the sandboxed child.
 {
   let hits = 0;
