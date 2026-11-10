@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM 벤치마커</title>
+<style>
+:root{--bg:#f4f6fa;--card:#fff;--ink:#131a2a;--sub:#5b6577;--line:#dfe4ec;--accent:#1f6feb;--accent-ink:#fff;--good:#0f7b4f;--warn:#b45309;--bad:#b42318;--tint:31,111,235;--gauge-bg:#e6eaf1}
+@media (prefers-color-scheme:dark){:root{--bg:#0d1220;--card:#161d2e;--ink:#e8ecf4;--sub:#9aa5b8;--line:#28324a;--accent:#5b9dff;--accent-ink:#06101f;--good:#4ad295;--warn:#f0b35a;--bad:#ff7b6b;--tint:91,157,255;--gauge-bg:#232d44}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Noto Sans KR",sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:12px 24px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--card)}
+h1{font-size:18px;margin:0;letter-spacing:-.01em}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{border:0;background:none;color:var(--sub);font:inherit;padding:8px 14px;border-radius:8px;cursor:pointer}
+nav button[aria-selected=true]{background:rgba(var(--tint),.14);color:var(--ink);font-weight:600}
+main{max-width:1180px;margin:0 auto;padding:24px 16px 64px}
+section[hidden]{display:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+h2{font-size:16px;margin:0 0 12px}
+h3{font-size:14px;margin:16px 0 8px;color:var(--sub);font-weight:600}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:16px}
+@media (max-width:860px){.grid{grid-template-columns:1fr}}
+.opts{display:flex;flex-wrap:wrap;gap:8px}
+.opt{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;min-width:150px}
+.opt:has(input:checked){border-color:var(--accent);background:rgba(var(--tint),.08)}
+.opt:has(input:disabled){opacity:.45;cursor:not-allowed}
+.opt small{display:block;color:var(--sub);font-size:12px}
+.go-wrap{display:flex;flex-direction:column;align-items:center;gap:10px}
+#go{width:150px;height:150px;border-radius:50%;border:3px solid var(--accent);background:transparent;color:var(--accent);font:700 26px/1 inherit;cursor:pointer;transition:transform .15s,background .15s}
+#go:hover:not(:disabled){background:rgba(var(--tint),.1);transform:scale(1.03)}
+#go:disabled{opacity:.4;cursor:not-allowed}
+#cancel{border:1px solid var(--line);background:none;color:var(--sub);border-radius:8px;padding:6px 14px;font:inherit;cursor:pointer}
+.note{color:var(--sub);font-size:13px}
+.gauge{position:relative;width:260px;margin:0 auto}
+.gauge svg{display:block;width:100%}
+.gauge .val{position:absolute;left:0;right:0;top:46%;text-align:center;font:700 44px/1 inherit;font-variant-numeric:tabular-nums}
+.gauge .lab{text-align:center;color:var(--sub);font-size:13px;min-height:20px}
+.mrow{border-top:1px solid var(--line);padding:12px 0}
+.mrow:first-child{border-top:0}
+.mhead{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.bar{height:6px;background:var(--gauge-bg);border-radius:3px;overflow:hidden;margin:6px 0}
+.bar i{display:block;height:100%;background:var(--accent);transition:width .4s}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12px;border-radius:999px;padding:2px 9px;background:var(--gauge-bg);color:var(--sub);font-variant-numeric:tabular-nums}
+.chip.done{color:var(--ink);background:rgba(var(--tint),.16)}
+.status{font-size:12px;color:var(--sub)}
+.status.bad{color:var(--bad)}.status.ok{color:var(--good)}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--card)}
+thead th{font-size:13px;color:var(--sub);font-weight:600;vertical-align:bottom}
+thead th small{display:block;font-weight:400}
+td.best{font-weight:700}
+td.best::after{content:" ●";color:var(--good);font-size:10px;vertical-align:middle}
+tr.total td{font-weight:700;border-top:2px solid var(--line)}
+tr.meta td{color:var(--sub);font-size:13px}
+td.cell{cursor:default}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:12px}
+.seg button{border:0;background:none;color:var(--sub);font:inherit;padding:6px 14px;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--accent);color:var(--accent-ink)}
+ul.rec{margin:0;padding-left:18px}
+ul.rec li{margin:4px 0}
+.runitem{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--line);cursor:pointer}
+.runitem:first-child{border-top:0}
+details{border-top:1px solid var(--line);padding:8px 0}
+summary{cursor:pointer}
+pre{white-space:pre-wrap;word-break:break-word;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font:12px/1.5 ui-monospace,Menlo,monospace;max-height:320px;overflow:auto}
+img.svg{max-width:260px;background:#fff;border:1px solid var(--line);border-radius:8px}
+.err{color:var(--bad)}
+</style>
+</head>
+<body>
+<header>
+  <h1>LLM 벤치마커</h1>
+  <nav role="tablist">
+    <button data-tab="measure" aria-selected="true">측정</button>
+    <button data-tab="board" aria-selected="false">기준표</button>
+    <button data-tab="history" aria-selected="false">기록</button>
+    <button data-tab="method" aria-selected="false">측정 방법</button>
+  </nav>
+</header>
+<main>
+<section id="tab-measure">
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>측정할 모델</h2>
+        <h3>Claude 구독</h3><div class="opts" id="models-claude"></div>
+        <h3>Grok 구독</h3><div class="opts" id="models-grok"></div>
+        <h3>추론 강도 (여러 개를 고르면 강도별로 따로 측정)</h3>
+        <div class="opts" id="efforts"></div>
+        <h3>측정 깊이</h3>
+        <div class="opts" id="depth"></div>
+        <h3>측정 환경</h3>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="mode" value="asused" checked><span>실사용 환경<small>내 지침, 스킬, 도구가 모두 붙은 상태</small></span></label>
+          <label class="opt"><input type="radio" name="mode" value="isolated"><span>순수 모델<small>지침과 도구를 뺀 모델 자체</small></span></label>
+        </div>
+      </div>
+      <div class="card" id="progress-card" hidden>
+        <h2>진행 상황</h2>
+        <div id="progress"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card go-wrap">
+        <div class="gauge">
+          <svg viewBox="0 0 200 120" aria-hidden="true">
+            <path d="M20 110 A80 80 0 0 1 180 110" fill="none" stroke="var(--gauge-bg)" stroke-width="14" stroke-linecap="round"/>
+            <path id="arc" d="M20 110 A80 80 0 0 1 180 110" fill="none" stroke="var(--accent)" stroke-width="14" stroke-linecap="round" stroke-dasharray="0 252" style="transition:stroke-dasharray .6s;opacity:0"/>
+          </svg>
+          <div class="val" id="gval">0</div>
+          <div class="lab" id="glab">종합 점수 (100점 만점)</div>
+        </div>
+        <button id="go">시작</button>
+        <button id="cancel" hidden>중단</button>
+        <div class="note" id="estimate"></div>
+        <div class="err" id="runerr"></div>
+      </div>
+      <div class="card note">
+        측정은 구독 사용량을 씁니다. 빠른 측정으로 먼저 확인한 뒤 정밀 측정을 권합니다. 주간 사용량이 소진된 뒤의 추가 과금 설정은 각 서비스의 결제 화면에서 확인하세요.
+      </div>
+    </div>
+  </div>
+  <div class="card" id="result-card" hidden>
+    <h2>이번 측정 결과</h2>
+    <div id="result"></div>
+  </div>
+</section>
+
+<section id="tab-board" hidden>
+  <div class="card">
+    <h2>작업별 기준표</h2>
+    <div class="seg" id="board-mode">
+      <button data-mode="asused" aria-pressed="true">실사용 환경</button>
+      <button data-mode="isolated" aria-pressed="false">순수 모델</button>
+    </div>
+    <div id="board"></div>
+  </div>
+  <div class="card"><h2>작업별 추천</h2><div id="recs"></div></div>
+</section>
+
+<section id="tab-history" hidden>
+  <div class="card"><h2>측정 기록</h2><div id="runs"></div></div>
+  <div class="card" id="detail-card" hidden><h2 id="detail-title"></h2><div id="detail"></div></div>
+</section>
+
+<section id="tab-method" hidden>
+  <div class="card">
+    <h2>무엇을 어떻게 재는가</h2>
+    <p>모든 모델에 같은 과제, 같은 문장, 같은 채점 규칙을 적용합니다. 각 구독의 명령줄 도구(claude, grok)를 이 컴퓨터에서 직접 호출하므로 API 키가 필요 없고, 구독으로 실제 쓰는 환경 그대로 측정합니다.</p>
+    <div id="method-cats"></div>
+    <h3>점수 계산</h3>
+    <p>과제 점수는 0~100점입니다. 분류 점수는 그 분류 과제들의 평균이고, 종합 점수는 분류 점수의 단순 평균입니다. 속도와 비용은 종합 점수에 넣지 않고 따로 표시합니다.</p>
+    <h3>정답이 없는 과제(기획, 창의력)</h3>
+    <p>형식과 제약은 규칙으로 검사하고, 품질은 Claude 모델 하나와 Grok 모델 하나가 작성자를 모르는 상태로 채점한 값의 평균을 씁니다. 두 진영의 심사자를 함께 쓰는 이유는 한쪽 심사자가 자기 진영의 글을 선호할 가능성을 상쇄하기 위해서입니다.</p>
+    <h3>이 측정의 한계</h3>
+    <ul>
+      <li>과제 수가 적습니다(빠른 측정은 분류당 1개, 정밀 측정은 2~3개). 점수 차이가 10점 안쪽이면 우열로 읽지 마세요. 같은 측정을 다시 하면 점수가 달라질 수 있습니다.</li>
+      <li>실사용 환경 점수는 지침, 스킬, 도구 설정을 바꾸면 달라집니다. 그래서 측정마다 당시 환경의 기본 입력 토큰 수를 함께 기록합니다.</li>
+      <li>웹 검색으로 최신 정보를 찾는 능력은 재지 않습니다. 검색 결과가 시점마다 달라 같은 기준을 적용할 수 없기 때문입니다. 리서치 분류는 주어진 자료를 분석하는 능력만 잽니다.</li>
+      <li>이미지와 영상을 직접 만드는 능력은 재지 않습니다. 이 서비스가 호출하는 모델은 글과 코드를 출력합니다. 이미지 분류는 그림을 코드(SVG)로 그리는 능력만 재는 실험 항목입니다.</li>
+      <li>과제는 이 서비스를 만든 Claude가 작성했습니다. Claude 계열에 유리하게 치우쳤을 가능성이 있습니다. 채점은 대부분 규칙과 숨은 테스트로 하므로 심사 편향의 영향은 기획과 창의력 분류에 한정됩니다.</li>
+      <li>비용은 각 도구가 보고하는 정가 기준 추정값이며 구독 요금과는 다릅니다.</li>
+      <li>추론 강도 "기본값"은 강도를 지정하지 않고 호출한 결과입니다. 실사용 환경에서는 내 설정 파일에 모델별로 적어 둔 강도가 적용됩니다. 모델이 지원하지 않는 강도를 고르면 그 조합은 오류로 중단되고 점수에 넣지 않습니다.</li>
+      <li>Grok Bot 앱은 요청마다 모델을 자동으로 고릅니다. 이 서비스는 모델을 지정할 수 있는 grok 명령줄 도구로 측정하므로, 앱에서의 체감과 다를 수 있습니다.</li>
+    </ul>
+  </div>
+</section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const el = (tag, props = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) { if (k === 'class') n.className = v; else if (k === 'dataset') Object.assign(n.dataset, v); else if (k.startsWith('on')) n.addEventListener(k.slice(2), v); else if (v !== false && v !== null && v !== undefined) n.setAttribute(k, v === true ? '' : v); }
+  for (const k of kids.flat()) if (k !== null && k !== undefined && k !== false) n.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return n;
+};
+const api = async (path, body) => {
+  const r = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `요청 실패 (${r.status})`);
+  return j;
+};
+const fmt = (v, unit = '') => (v === null || v === undefined ? '측정 안 됨' : `${v}${unit}`);
+const when = (iso) => (iso ? new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+const STATUS = { pending: '대기', running: '측정 중', done: '완료', limit: '사용량 한도로 중단', setup: '도구를 찾지 못함', error: '오류', aborted: '중단됨' };
+const MODE = { asused: '실사용 환경', isolated: '순수 모델' };
+const DEPTH = { quick: '빠른 측정', full: '정밀 측정' };
+let CFG = null, pollTimer = null, boardMode = 'asused';
+
+// ----- tabs -----
+document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('nav button').forEach((x) => x.setAttribute('aria-selected', x === b));
+  document.querySelectorAll('main > section').forEach((s) => (s.hidden = s.id !== `tab-${b.dataset.tab}`));
+  if (b.dataset.tab === 'board') loadBoard();
+  if (b.dataset.tab === 'history') loadRuns();
+}));
+
+// ----- setup form -----
+function selected() {
+  return {
+    models: [...document.querySelectorAll('input[name=model]:checked')].map((i) => i.value),
+    efforts: [...document.querySelectorAll('input[name=effort]:checked')].map((i) => i.value),
+    depth: document.querySelector('input[name=depth]:checked').value,
+    mode: document.querySelector('input[name=mode]:checked').value,
+  };
+}
+function updateEstimate() {
+  const s = selected(); const n = CFG.counts[s.depth];
+  const judged = CFG.tasks.filter((t) => t.judged).length; const judgedN = s.depth === 'full' ? judged : new Set(CFG.tasks.filter((t) => t.judged).map((t) => t.cat)).size;
+  const combos = s.models.length * s.efforts.length;
+  const calls = combos * (n + judgedN * CFG.judges.length);
+  $('#estimate').textContent = combos ? `모델 ${s.models.length}개 × 강도 ${s.efforts.length}개 × 과제 ${n}개, 심사 포함 약 ${calls}회 호출` : '모델과 추론 강도를 하나 이상 고르세요';
+  $('#go').disabled = !combos || !!pollTimer;
+}
+async function init() {
+  CFG = await api('/api/config');
+  for (const m of CFG.models) {
+    $(`#models-${m.provider}`).append(el('label', { class: 'opt' },
+      el('input', { type: 'checkbox', name: 'model', value: m.key, disabled: !m.available, checked: m.available && /sonnet|grok-4\.7$/.test(m.model), onchange: updateEstimate }),
+      el('span', {}, m.label, el('small', {}, m.available ? m.model : '도구 없음'))));
+  }
+  const EFFORT_NOTE = { default: '내 설정 그대로', low: '빠르고 가벼움', medium: '중간', high: '깊게 생각', xhigh: '가장 깊게' };
+  for (const e of CFG.efforts) $('#efforts').append(el('label', { class: 'opt' }, el('input', { type: 'checkbox', name: 'effort', value: e, checked: e === 'default', onchange: updateEstimate }), el('span', {}, e === 'default' ? '기본값' : e, el('small', {}, EFFORT_NOTE[e] || ''))));
+  $('#depth').append(
+    el('label', { class: 'opt' }, el('input', { type: 'radio', name: 'depth', value: 'quick', checked: true, onchange: updateEstimate }), el('span', {}, '빠른 측정', el('small', {}, `분류당 1개, 총 ${CFG.counts.quick}개 과제`))),
+    el('label', { class: 'opt' }, el('input', { type: 'radio', name: 'depth', value: 'full', onchange: updateEstimate }), el('span', {}, '정밀 측정', el('small', {}, `전체 ${CFG.counts.full}개 과제`))));
+  $('#method-cats').append(el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, '분류'), el('th', { style: 'text-align:left' }, '재는 것'))),
+    el('tbody', {}, CFG.categories.map((c) => el('tr', {}, el('td', {}, c.name), el('td', { style: 'text-align:left;white-space:normal' }, c.desc))))));
+  updateEstimate();
+  const cur = await api('/api/current');
+  if (cur) { renderRun(cur); if (cur.status === 'running') startPolling(); }
+}
+
+// ----- run + progress -----
+function setGauge(v, label) {
+  const n = v === null || v === undefined ? 0 : v;
+  $('#arc').setAttribute('stroke-dasharray', `${(n / 100) * 251.3} 252`);
+  $('#arc').style.opacity = n > 0 ? 1 : 0;
+  $('#gval').textContent = v === null || v === undefined ? '0' : Math.round(n);
+  if (label) $('#glab').textContent = label;
+}
+function renderRun(run) {
+  $('#progress-card').hidden = false;
+  const total = run.taskIds.length || CFG.counts[run.depth];
+  const box = $('#progress'); box.replaceChildren();
+  let latest = null;
+  for (const m of run.models) {
+    const done = Object.keys(m.tasks).length;
+    if (m.summary && m.summary.overall !== null && (m.status === 'running' || !latest)) latest = m;
+    const cur = m.currentTask && CFG.tasks.find((t) => t.id === m.currentTask);
+    box.append(el('div', { class: 'mrow' },
+      el('div', { class: 'mhead' }, el('strong', {}, m.label),
+        el('span', { class: `status ${m.status === 'done' ? 'ok' : ['limit', 'error', 'setup'].includes(m.status) ? 'bad' : ''}` }, `${STATUS[m.status] || m.status} · ${done}/${total}${cur ? ` · ${cur.title}` : ''}`)),
+      el('div', { class: 'bar' }, el('i', { style: `width:${(100 * done) / total}%` })),
+      el('div', { class: 'chips' }, CFG.categories.map((c) => { const v = m.summary && m.summary.cats[c.id]; return el('span', { class: `chip ${v !== undefined ? 'done' : ''}` }, `${c.name}${v !== undefined ? ' ' + Math.round(v) : ''}`); })),
+      m.error ? el('div', { class: 'status bad' }, m.error) : null));
+  }
+  if (latest) setGauge(latest.summary.overall, `${latest.label} 종합 점수`);
+  const envNote = Object.entries(run.env || {}).map(([p, e]) => `${p}: 기본 입력 ${e.baselineInputTokens ?? '측정 실패'}토큰`).join(' · ');
+  if (run.status !== 'running') {
+    $('#result-card').hidden = false;
+    $('#result').replaceChildren(
+      el('p', { class: 'note' }, `${MODE[run.mode]} · ${DEPTH[run.depth]} · ${when(run.finishedAt || run.startedAt)}${envNote ? ' · ' + envNote : ''}${run.status === 'aborted' ? ' · 중단된 측정' : ''}`),
+      matrix(run.models.filter((m) => m.summary && m.summary.overall !== null).map((m) => ({ label: m.label, sub: STATUS[m.status], summary: m.summary }))),
+      el('p', { class: 'note' }, '과제별 답안과 채점 근거는 기록 탭에서 볼 수 있습니다.'));
+  } else $('#result-card').hidden = true;
+}
+function startPolling() {
+  $('#go').disabled = true; $('#cancel').hidden = false;
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const run = await api('/api/current'); if (!run) return;
+      renderRun(run);
+      if (run.status !== 'running') { clearInterval(pollTimer); pollTimer = null; $('#cancel').hidden = true; updateEstimate(); if (run.error) $('#runerr').textContent = run.error; }
+    } catch (e) { $('#runerr').textContent = `서버에 연결할 수 없습니다: ${e.message}`; }
+  }, 1500);
+}
+$('#go').addEventListener('click', async () => {
+  $('#runerr').textContent = ''; setGauge(null, '측정 준비 중');
+  try { renderRun(await api('/api/run', selected())); startPolling(); } catch (e) { $('#runerr').textContent = e.message; }
+});
+$('#cancel').addEventListener('click', () => api('/api/cancel', {}).catch(() => {}));
+
+// ----- score matrix -----
+function matrix(cols) {
+  if (!cols.length) return el('p', { class: 'note' }, '표시할 측정 결과가 없습니다.');
+  const row = (name, get, opts = {}) => {
+    const vals = cols.map(get); const nums = vals.filter((v) => typeof v === 'number');
+    const best = nums.length > 1 && opts.rank ? (opts.rank === 'low' ? Math.min(...nums) : Math.max(...nums)) : null;
+    return el('tr', { class: opts.cls || '' }, el('td', {}, name), vals.map((v) => {
+      const td = el('td', { class: `cell ${v === best && best !== null ? 'best' : ''}` }, v === null || v === undefined ? '-' : `${opts.fmt ? opts.fmt(v) : v}`);
+      if (opts.tint && typeof v === 'number') td.style.background = `rgba(var(--tint),${(0.04 + 0.26 * (v / 100)).toFixed(3)})`;
+      return td;
+    }));
+  };
+  return el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {}, el('th', {}, '분류'), cols.map((c) => el('th', {}, c.label, c.sub ? el('small', {}, c.sub) : null)))),
+    el('tbody', {},
+      CFG.categories.map((c) => row(c.name, (x) => x.summary.cats[c.id] ?? null, { rank: 'high', tint: true, fmt: (v) => Math.round(v) })),
+      row('종합', (x) => x.summary.overall, { rank: 'high', cls: 'total', fmt: (v) => v.toFixed(1) }),
+      row('응답 시간(중앙값)', (x) => x.summary.medianSec, { rank: 'low', cls: 'meta', fmt: (v) => `${v}초` }),
+      row('출력 속도', (x) => x.summary.outTokPerSec, { rank: 'high', cls: 'meta', fmt: (v) => `${v}토큰/초` }),
+      row('호출당 입력량', (x) => x.summary.avgInputTokens, { rank: 'low', cls: 'meta', fmt: (v) => `${v.toLocaleString()}토큰` }),
+      row('비용 추정(정가)', (x) => x.summary.costUsd, { rank: 'low', cls: 'meta', fmt: (v) => `$${v.toFixed(3)}` }),
+      row('실패한 과제', (x) => x.summary.failures, { cls: 'meta', fmt: (v) => `${v}개` }))));
+}
+
+// ----- board -----
+document.querySelectorAll('#board-mode button').forEach((b) => b.addEventListener('click', () => {
+  boardMode = b.dataset.mode; document.querySelectorAll('#board-mode button').forEach((x) => x.setAttribute('aria-pressed', x === b)); loadBoard();
+}));
+async function loadBoard() {
+  const all = await api('/api/board'); const rows = all.filter((r) => r.mode === boardMode);
+  const order = CFG.models.map((m) => m.key); rows.sort((a, b) => order.indexOf(a.baseKey) - order.indexOf(b.baseKey) || CFG.efforts.indexOf(a.effort) - CFG.efforts.indexOf(b.effort));
+  $('#board').replaceChildren(rows.length ? matrix(rows.map((r) => ({ label: r.label, sub: `${DEPTH[r.depth]} · ${when(r.measuredAt)}`, summary: r.summary }))) : el('p', { class: 'note' }, `${MODE[boardMode]} 기준으로 완료된 측정이 아직 없습니다. 측정 탭에서 먼저 측정하세요.`));
+  const recs = el('ul', { class: 'rec' });
+  if (rows.length >= 2) {
+    for (const c of CFG.categories) {
+      const scored = rows.filter((r) => r.summary.cats[c.id] !== undefined).sort((a, b) => b.summary.cats[c.id] - a.summary.cats[c.id]);
+      if (scored.length < 2) continue;
+      const top = scored[0].summary.cats[c.id]; const close = scored.filter((r) => top - r.summary.cats[c.id] <= 10);
+      recs.append(el('li', {}, el('strong', {}, c.name), ': ', close.length === 1
+        ? `${scored[0].label} (${Math.round(top)}점, 2위와 ${Math.round(top - scored[1].summary.cats[c.id])}점 차이)`
+        : (() => { const fast = [...close].filter((r) => r.summary.medianSec !== null).sort((x, y) => x.summary.medianSec - y.summary.medianSec)[0];
+          return `점수로는 우열 없음 (${close.length}개가 ${Math.round(Math.min(...close.map((r) => r.summary.cats[c.id])))}~${Math.round(top)}점).${fast ? ` 이 중 가장 빠른 것은 ${fast.label} (응답 시간 중앙값 ${fast.summary.medianSec}초).` : ''}`; })()));
+    }
+    $('#recs').replaceChildren(recs, el('p', { class: 'note' }, '10점 이내의 차이는 과제 수가 적어 우열로 판단하지 않습니다.'));
+  } else $('#recs').replaceChildren(el('p', { class: 'note' }, '모델 두 개 이상을 같은 환경으로 측정하면 작업별 추천이 표시됩니다.'));
+}
+
+// ----- history -----
+async function loadRuns() {
+  const runs = await api('/api/runs'); const box = $('#runs'); box.replaceChildren();
+  if (!runs.length) return box.append(el('p', { class: 'note' }, '아직 측정 기록이 없습니다.'));
+  for (const r of runs) {
+    box.append(el('div', { class: 'runitem', onclick: () => showRun(r.id) },
+      el('span', {}, el('strong', {}, when(r.startedAt)), ` · ${MODE[r.mode]} · ${DEPTH[r.depth]} · ${STATUS[r.status] || r.status}`),
+      el('span', { class: 'note' }, r.models.map((m) => `${m.label} ${m.overall ?? '-'}`).join(' / '))));
+  }
+}
+async function showRun(id) {
+  const run = await api(`/api/runs/${id}`);
+  $('#detail-card').hidden = false; $('#detail-title').textContent = `${when(run.startedAt)} 측정 상세`;
+  const box = $('#detail'); box.replaceChildren(matrix(run.models.filter((m) => m.summary && m.summary.overall !== null).map((m) => ({ label: m.label, sub: STATUS[m.status], summary: m.summary }))));
+  for (const tid of run.taskIds) {
+    const meta = CFG.tasks.find((t) => t.id === tid); const cat = CFG.categories.find((c) => c.id === (meta && meta.cat));
+    const d = el('details', {}, el('summary', {}, el('strong', {}, `${cat ? cat.name : ''} · ${meta ? meta.title : tid}`), ' ', el('span', { class: 'note' }, run.models.map((m) => `${m.label} ${m.tasks[tid] ? m.tasks[tid].score : '-'}`).join(' / '))));
+    for (const m of run.models) {
+      const t = m.tasks[tid]; if (!t) continue;
+      d.append(el('h3', {}, `${m.label}: ${t.score}점 · ${(t.ms / 1000).toFixed(1)}초`), el('div', { class: 'note' }, t.detail || ''),
+        t.judges ? el('div', { class: 'note' }, '심사: ' + t.judges.map((j) => `${j.judge} ${j.ok ? j.score + '점 (' + j.comment + ')' : '실패'}`).join(' · ')) : null,
+        t.svg ? el('img', { class: 'svg', alt: `${m.label}이 그린 그림`, src: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(t.svg) }) : null,
+        el('pre', {}, t.answer || t.error || ''));
+    }
+    box.append(d);
+  }
+  $('#detail-card').scrollIntoView({ behavior: 'smooth' });
+}
+init().catch((e) => { $('#runerr').textContent = e.message; });
+</script>
+</body>
+</html>

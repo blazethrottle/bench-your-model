@@ -1,0 +1,72 @@
+{
+  "port": 4173,
+  "models": [
+    {
+      "provider": "claude",
+      "model": "claude-fable-5-2",
+      "label": "Claude Fable 5.2",
+      "behavesAs": "claude-fable-5-1"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-opus-5-5",
+      "label": "Claude Opus 5.5"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "label": "Claude Sonnet 5.5"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-haiku-5-5",
+      "label": "Claude Haiku 5.5"
+    },
+    {
+      "provider": "grok",
+      "model": "grok-4.7",
+      "label": "Grok 4.7"
+    },
+    {
+      "provider": "grok",
+      "model": "grok-4.7-build-fast",
+      "label": "Grok 4.7 Build Fast"
+    },
+    {
+      "provider": "grok",
+      "model": "grok-4.6",
+      "label": "Grok 4.6"
+    },
+    {
+      "provider": "grok",
+      "model": "grok-4.5",
+      "label": "Grok 4.5"
+    }
+  ],
+  "efforts": [
+    "default",
+    "low",
+    "medium",
+    "high",
+    "xhigh"
+  ],
+  "judges": [
+    {
+      "provider": "claude",
+      "model": "claude-sonnet-5-5"
+    },
+    {
+      "provider": "grok",
+      "model": "grok-4.7"
+    }
+  ],
+  "probeModels": {
+    "claude": "claude-haiku-5-5",
+    "grok": "grok-4.5"
+  },
+  "taskTimeoutSec": {
+    "asused": 480,
+    "isolated": 300
+  },
+  "parallelModels": 3
+}
