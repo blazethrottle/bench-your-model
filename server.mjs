@@ -58,7 +58,7 @@ async function runModel(run, model, tasks, signal) {
   for (const task of tasks) {
     if (signal.aborted) { model.status = 'aborted'; break; }
     model.currentTask = task.id;
-    const r = await ask({ provider: model.provider, model: model.model, behavesAs: model.behavesAs, effort: model.effort === 'default' ? undefined : model.effort, prompt: task.prompt, mode: run.mode, files: task.files, collect: !!task.files, timeoutMs: task.timeoutSec ? task.timeoutSec * 1000 : timeoutMs, signal });
+    const r = await ask({ provider: model.provider, model: model.model, behavesAs: model.behavesAs, effort: model.effort === 'default' ? undefined : model.effort, prompt: task.prompt, mode: run.mode, files: task.files, collect: !!task.files, inspect: task.inspect, timeoutMs: task.timeoutSec ? task.timeoutSec * 1000 : timeoutMs, signal });
     if (r.kind === 'aborted') { model.status = 'aborted'; break; }
     if (r.kind === 'limit' || r.kind === 'setup') { model.status = r.kind; model.error = r.error; break; }
     // Two failed calls in a row means the model or effort level is not usable; stop instead of recording zeros.
@@ -78,6 +78,8 @@ async function runModel(run, model, tasks, signal) {
       try { det = await task.score(r.text || '', r.workFiles || {}); if (r.kind !== 'ok') det.detail = `${r.error}. 폴더에 남은 결과로 채점: ${det.detail}`; } catch (e) { det = { score: 0, detail: `채점 중 오류: ${String(e && e.message).slice(0, 120)}` }; }
       rec.detail = det.detail; rec.detScore = det.score;
       if (det.raw !== undefined) rec.raw = det.raw; // raw objective values, so results can be rescored later
+      // The submitted file itself is kept too, so it can be graded again later on a quiet machine.
+      if (task.keep && r.workFiles) rec.work = Object.fromEntries(task.keep.filter((f) => typeof r.workFiles[f] === 'string').map((f) => [f, r.workFiles[f].slice(0, 400000)]));
       if (r.kind !== 'ok') rec.graded = true;
       if (det.svg !== undefined) rec.svg = det.svg.slice(0, 20000);
       if (task.judge) {
@@ -108,7 +110,7 @@ async function execute(run, signal) {
   await saveRun(run);
   const queue = [...run.models];
   const worker = async () => { for (let m = queue.shift(); m; m = queue.shift()) await runModel(run, m, tasks, signal).catch((e) => { m.status = 'error'; m.error = String(e && e.message); }); };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(CONFIG.parallelModels || 2, run.models.length)) }, worker));
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(run.parallel || CONFIG.parallelModels || 2, run.models.length)) }, worker));
   run.status = signal.aborted ? 'aborted' : 'done';
   run.finishedAt = new Date().toISOString();
   await saveRun(run);
@@ -123,13 +125,14 @@ function startRun(body) {
   // Calibration helpers (API only): run chosen task ids, and repeat each model to see run-to-run spread.
   const onlyTasks = Array.isArray(body.taskIds) ? body.taskIds.map(String).filter((id) => TASKS.some((t) => t.id === id)) : null;
   const repeat = Math.min(3, Math.max(1, Number(body.repeat) || 1));
+  const parallel = Math.min(6, Math.max(1, Number(body.parallel) || 0)) || null;
   const mode = body.mode === 'isolated' ? 'isolated' : 'asused';
   const efforts = (Array.isArray(body.efforts) ? [...new Set(body.efforts.map(String))] : ['default']).filter((e) => EFFORTS.includes(e));
   if (!efforts.length) efforts.push('default');
   const variants = models.flatMap((m) => efforts.flatMap((e) => Array.from({ length: repeat }, (_, i) => ({ ...m, key: `${keyOf(m)}@${e}${repeat > 1 ? `#${i + 1}` : ''}`, baseKey: keyOf(m), effort: e, label: `${m.label}${e === 'default' ? '' : ` · ${e}`}${repeat > 1 ? ` · ${i + 1}회차` : ''}` }))));
   const run = {
     id: new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14) + '-' + Math.random().toString(36).slice(2, 6),
-    startedAt: new Date().toISOString(), finishedAt: null, depth, mode, onlyTasks: onlyTasks && onlyTasks.length ? onlyTasks : null, repeat, status: 'running', env: {}, judges: CONFIG.judges, taskIds: [],
+    startedAt: new Date().toISOString(), finishedAt: null, depth, mode, onlyTasks: onlyTasks && onlyTasks.length ? onlyTasks : null, repeat, parallel, status: 'running', env: {}, judges: CONFIG.judges, taskIds: [],
     models: variants.map((m) => ({ ...m, status: 'pending', currentTask: null, error: null, tasks: {}, summary: null })),
   };
   const abort = new AbortController();
@@ -139,7 +142,7 @@ function startRun(body) {
 }
 
 // ---------- read models ----------
-const light = (run) => ({ ...run, models: run.models.map((m) => ({ ...m, tasks: Object.fromEntries(Object.entries(m.tasks).map(([id, t]) => [id, { ...t, answer: undefined, svg: undefined, judges: undefined }])) })) });
+const light = (run) => ({ ...run, models: run.models.map((m) => ({ ...m, tasks: Object.fromEntries(Object.entries(m.tasks).map(([id, t]) => [id, { ...t, answer: undefined, svg: undefined, judges: undefined, work: undefined }])) })) });
 
 async function loadRuns() {
   let files = [];
@@ -249,6 +252,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/current') return send(res, 200, current ? light(current.run) : null);
     if (url.pathname === '/api/board') return send(res, 200, await board());
     if (url.pathname === '/api/board-long') return send(res, 200, await longBoard());
+    if (url.pathname === '/api/report') { try { return send(res, 200, await readFile(join(ROOT, 'data', 'report.json'), 'utf8')); } catch { return send(res, 404, { error: 'no report yet' }); } }
     if (url.pathname === '/api/runs') return send(res, 200, (await loadRuns()).map((r) => ({ id: r.id, startedAt: r.startedAt, finishedAt: r.finishedAt, depth: r.depth, mode: r.mode, status: r.status, models: r.models.map((m) => ({ key: m.key, label: m.label, status: m.status, overall: m.summary && m.summary.overall })) })));
     const m = /^\/api\/runs\/([\w-]+)$/.exec(url.pathname);
     if (m) {

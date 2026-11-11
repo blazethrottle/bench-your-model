@@ -76,6 +76,7 @@ img.svg{max-width:260px;background:#fff;border:1px solid var(--line);border-radi
   <h1>LLM 벤치마커</h1>
   <nav role="tablist">
     <button data-tab="measure" aria-selected="true">측정</button>
+    <button data-tab="report" aria-selected="false">성적표</button>
     <button data-tab="board" aria-selected="false">기준표</button>
     <button data-tab="history" aria-selected="false">기록</button>
     <button data-tab="method" aria-selected="false">측정 방법</button>
@@ -133,6 +134,18 @@ img.svg{max-width:260px;background:#fff;border:1px solid var(--line);border-radi
     <h2>이번 측정 결과</h2>
     <div id="result"></div>
   </div>
+</section>
+
+<section id="tab-report" hidden>
+  <div class="card">
+    <h2 id="rep-title">통합 성적표</h2>
+    <p class="note" id="rep-meta"></p>
+    <div id="rep-summary"></div>
+    <div class="tablewrap" style="overflow-x:auto"><div id="rep-table"></div></div>
+    <p class="note" id="rep-legend"></p>
+  </div>
+  <div class="card"><h2>작업별 모델 선택 기준</h2><div id="rep-criteria"></div></div>
+  <div class="card"><h2>읽을 때의 주의점</h2><div id="rep-notes"></div></div>
 </section>
 
 <section id="tab-board" hidden>
@@ -207,6 +220,7 @@ document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click
   document.querySelectorAll('nav button').forEach((x) => x.setAttribute('aria-selected', x === b));
   document.querySelectorAll('main > section').forEach((s) => (s.hidden = s.id !== `tab-${b.dataset.tab}`));
   if (b.dataset.tab === 'board') loadBoard();
+  if (b.dataset.tab === 'report') loadReport();
   if (b.dataset.tab === 'history') loadRuns();
 }));
 
@@ -324,6 +338,29 @@ function matrix(cols) {
       row('비용 추정(정가)', (x) => x.summary.costUsd, { rank: 'low', cls: 'meta', fmt: (v) => `$${v.toFixed(3)}` }),
       row('실패한 과제', (x) => x.summary.failures, { cls: 'meta', fmt: (v) => `${v}개` }),
       cols.some((c) => c.summary.timeouts) ? row('제한 시간 초과', (x) => x.summary.timeouts ?? 0, { cls: 'meta', fmt: (v) => `${v}개` }) : null)));
+}
+
+// ----- report: one table for every model, built by tools/report.mjs -----
+async function loadReport() {
+  const box = $('#rep-table'); box.replaceChildren();
+  let rep;
+  try { rep = await api('/api/report'); } catch { $('#rep-meta').textContent = '아직 성적표가 없습니다. 측정을 마친 뒤 node tools/report.mjs 를 실행하면 만들어집니다.'; return; }
+  $('#rep-title').textContent = rep.title || '통합 성적표';
+  $('#rep-meta').textContent = `${when(rep.generatedAt)} 작성 · ${rep.scope || ''}`;
+  $('#rep-summary').replaceChildren(...(rep.summary || []).map((t) => el('p', {}, t)));
+  const head1 = el('tr', {}, el('th', { rowspan: 2 }, '모델 · 추론 강도'), ...rep.groups.map((g) => el('th', { colspan: g.span, style: 'text-align:center;border-left:1px solid var(--line)' }, g.title)));
+  const head2 = el('tr', {}, ...rep.columns.map((c) => el('th', {}, c.title, c.sub ? el('small', { style: 'display:block;font-weight:400' }, c.sub) : null)));
+  const body = rep.rows.map((r) => el('tr', {}, el('td', {}, r.label, r.sub ? el('small', { style: 'display:block;color:var(--sub)' }, r.sub) : null), ...rep.columns.map((c) => {
+    const x = r.cells[c.id];
+    if (!x) return el('td', { style: 'color:var(--sub)' }, '-');
+    const td = el('td', { class: x.mark === 'best' ? 'best' : '' }, x.mark === 'tie' ? `${x.v} ○` : x.v, x.s ? el('small', { style: `display:block;font-weight:400;color:var(--${x.warn ? 'bad' : 'sub'})` }, x.s) : null);
+    if (typeof x.score === 'number') td.style.background = `rgba(var(--tint),${(0.04 + 0.26 * (x.score / 100)).toFixed(3)})`;
+    return td;
+  })));
+  box.append(el('table', {}, el('thead', {}, head1, head2), el('tbody', {}, ...body)));
+  $('#rep-legend').textContent = rep.legend || '';
+  $('#rep-criteria').replaceChildren(el('table', {}, el('thead', {}, el('tr', {}, ...['작업 종류', '먼저 쓸 모델', '대안', '근거'].map((t) => el('th', { style: 'text-align:left' }, t)))), el('tbody', {}, ...(rep.criteria || []).map((c) => el('tr', {}, ...[c.work, c.pick, c.alt || '-', c.why].map((t) => el('td', { style: 'text-align:left;white-space:normal' }, t)))))));
+  $('#rep-notes').replaceChildren(el('ul', {}, ...(rep.notes || []).map((t) => el('li', {}, t))));
 }
 
 // ----- board -----

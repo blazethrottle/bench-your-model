@@ -34,6 +34,22 @@ for (const t of TASKS) {
   console.log(`  coding-5 단순 풀이 점수: ${r.score} (${Math.round((Date.now() - t0) / 1000)}초) ${r.detail}`);
 }
 
+// Open tasks added later: the starter file scores 0, a plain built-in compressor lands in between, and a codec
+// that smuggles the text through memory instead of the bytes scores 0 (compress and decompress run in separate processes).
+{
+  const { codecTask, forecastTask, memoTask } = await import('../lib/tasks-open2.mjs');
+  const gz = "import zlib from 'node:zlib';\nexport function compress(t){ return new Uint8Array(zlib.gzipSync(t,{level:9})); }\nexport function decompress(b){ return zlib.gunzipSync(b).toString('utf8'); }";
+  const g = await codecTask.score('', { 'codec.mjs': gz });
+  check(g.score > 40 && g.score < 95, `coding-6 gzip 점수 ${g.score}`);
+  const cheat = await codecTask.score('', { 'codec.mjs': "let keep=''; export function compress(t){ keep=t; return new Uint8Array([1]); } export function decompress(){ return keep; }" });
+  check(cheat.score === 0, `coding-6 메모리로 빼돌린 풀이 점수 ${cheat.score}`);
+  const f = await forecastTask.score('', { 'model.mjs': 'export function predict(rows){ return rows.map(() => NaN); }' });
+  check(f.score === 0, `research-5 잘못된 반환값 점수 ${f.score}`);
+  const m = await memoTask.score('', { 'parser.mjs': 'export function parse(){ throw new Error("x"); }' });
+  check(m.score === 0, `repeat-5 예외만 내는 풀이 점수 ${m.score}`);
+  console.log(`  coding-6 gzip ${g.score}점, 빼돌린 풀이 ${cheat.score}점 · research-5 잘못된 반환 ${f.score}점 · repeat-5 예외 ${m.score}점`);
+}
+
 // Project tasks: every seeded defect must be detectable on its own, and the untouched fixture must score 0.
 {
   const { buildFixCases, PROJECT_INFO } = await import('../lib/tasks-project.mjs');
