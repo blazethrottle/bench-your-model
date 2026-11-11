@@ -58,7 +58,7 @@ async function runModel(run, model, tasks, signal) {
   for (const task of tasks) {
     if (signal.aborted) { model.status = 'aborted'; break; }
     model.currentTask = task.id;
-    const r = await ask({ provider: model.provider, model: model.model, behavesAs: model.behavesAs, effort: model.effort === 'default' ? undefined : model.effort, prompt: task.prompt, mode: run.mode, files: task.files, collect: !!task.files, inspect: task.inspect, timeoutMs: task.timeoutSec ? task.timeoutSec * 1000 : timeoutMs, signal });
+    const r = await ask({ provider: model.provider, model: model.model, behavesAs: model.behavesAs, effort: model.effort === 'default' ? undefined : model.effort, prompt: task.prompt, mode: run.mode, files: task.files, collect: !!task.files, inspect: task.inspect, webDomains: task.webDomains, timeoutMs: task.timeoutSec ? task.timeoutSec * 1000 : timeoutMs, signal });
     if (r.kind === 'aborted') { model.status = 'aborted'; break; }
     if (r.kind === 'limit' || r.kind === 'setup') { model.status = r.kind; model.error = r.error; break; }
     // Two failed calls in a row means the model or effort level is not usable; stop instead of recording zeros.

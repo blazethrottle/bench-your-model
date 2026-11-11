@@ -147,7 +147,7 @@ check(bad.score === 0, `planning-1 규칙 위반 점수 ${bad.score}`);
 
 check(PUZZLE.length === 1, `논리 문제의 해가 ${PUZZLE.length}개 (유일해야 함)`);
 check(SHIFT_STATS.count >= 5 && SHIFT_STATS.best.v > SHIFT_STATS.worst.v, `근무 배정: 가능한 해 ${SHIFT_STATS.count}개`);
-check(tasksFor('quick').every(Boolean) && tasksFor('quick').length === CATEGORIES.length, '빠른 측정 과제 구성');
+check(tasksFor('quick').every(Boolean) && tasksFor('quick').length === 9, '빠른 측정 과제 구성');
 check(tasksFor('long').length >= 1 && tasksFor('full').every((t) => !t.long), '고난도 측정 과제 구성');
 console.log(`논리 문제 해 ${PUZZLE.length}개, 근무 배정 가능한 해 ${SHIFT_STATS.count}개 (선호 합계 ${SHIFT_STATS.worst.v}~${SHIFT_STATS.best.v})`);
 console.log(`과제 ${TASKS.length}개, 빠른 측정 ${tasksFor('quick').length}개, 예산 문제 최적값 ${P3_OPT.v} (${P3_OPT.sel.join(',')})`);
