@@ -20,6 +20,10 @@ const args = process.argv.slice(2);
 const campaign = readJson(join(DATA, 'campaign.json'), {});
 const since = args.includes('--since') ? args[args.indexOf('--since') + 1] : campaign.since || '1970-01-01';
 const REGRADE = args.includes('--regrade');
+// The main table holds the current model generation; older Grok models go to a separate appendix table.
+const APPENDIX = args.includes('--appendix'), OLD = new Set(['grok:grok-4.6', 'grok:grok-4.5']);
+const inScope = (base) => OLD.has(base) === APPENDIX;
+const rejudge = readJson(join(DATA, 'rejudge.json'), {});
 const median = (xs) => { const s = [...xs].sort((a, b) => a - b); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : null; };
 const r1 = (v) => Math.round(v * 10) / 10;
 
@@ -30,6 +34,7 @@ const OPEN = [
   { id: 'repeat-5', title: '메모 정규화', sub: '반복 업무 자동화', work: '비정형 자료를 규칙대로 정리하는 자동화' },
 ];
 const PROJECT = [{ id: 'debug-5', title: '결함 수정', sub: '파일 10개 프로젝트' }, { id: 'debug-6', title: '코드 검토', sub: '결함 12개 찾기' }];
+const EXTRA = [{ id: 'web-1', title: '실시간 조회', sub: '값 16개 대조' }, { id: 'writing-1', title: '긴 문서', sub: '형식 30% + 맹검 심사 70%' }, { id: 'video-1', title: '동영상 편집', sub: '조건 9개' }, { id: 'video-2', title: '동영상 제작', sub: '조건 8개' }];
 const OPEN_IDS = OPEN.map((x) => x.id);
 
 // ---------- load ----------
@@ -83,21 +88,40 @@ function finalScore(x) {
   return x.rec.score;
 }
 
+// Long report: format checks 30% + the mean of one judge from each model family 70%.
+// The Claude-side judge score comes from the run itself; the Grok-side one from tools/rejudge.mjs.
+const judgePair = (x) => {
+  const c = (x.rec.judges || []).find((j) => j.ok && j.judge.startsWith('claude:')), g = ((rejudge[`${x.runId}|${x.mkey}`] || {}).results || []).find((j) => j.ok);
+  return { claude: c ? c.score : null, grok: g ? g.score : null };
+};
+function writingScore(x) {
+  const j = judgePair(x), vals = [j.claude, j.grok].filter((v) => typeof v === 'number');
+  if (!vals.length || typeof x.rec.detScore !== 'number') return x.rec.score;
+  return Math.round(x.rec.detScore * 0.3 + (vals.reduce((a, b) => a + b, 0) / vals.length) * 0.7);
+}
+
 // ---------- aggregate ----------
 const rows = new Map();
 const rowOf = (x) => { if (!rows.has(x.rowKey)) rows.set(x.rowKey, { key: x.rowKey, base: x.base, effort: x.effort, provider: x.provider, label: x.label, cells: {}, cost: 0, costKnown: 0, costMissing: 0, timeouts: 0, calls: 0, errors: 0 }); return rows.get(x.rowKey); };
 const dur = (sec) => (sec >= 90 ? `${r1(sec / 60)}분` : `${Math.round(sec)}초`);
 const byCell = new Map();
 for (const x of records) {
+  if (!inScope(x.base)) continue;
   const row = rowOf(x);
   if (!usable(x)) { row.errors++; continue; }
   row.calls++; if (x.rec.kind === 'timeout') row.timeouts++;
   if (typeof x.rec.costUsd === 'number') { row.cost += x.rec.costUsd; row.costKnown++; } else row.costMissing++;
-  if (OPEN_IDS.includes(x.taskId) || PROJECT.some((p) => p.id === x.taskId)) {
+  if (OPEN_IDS.includes(x.taskId) || [...PROJECT, ...EXTRA].some((p) => p.id === x.taskId)) {
     const k = `${x.rowKey}|${x.taskId}`;
     if (!byCell.has(k)) byCell.set(k, []);
-    byCell.get(k).push({ score: OPEN_IDS.includes(x.taskId) ? finalScore(x) : x.rec.score, sec: x.rec.ms / 1000, timeout: x.rec.kind === 'timeout' });
+    byCell.get(k).push({ score: OPEN_IDS.includes(x.taskId) ? finalScore(x) : x.taskId === 'writing-1' ? writingScore(x) : x.rec.score, sec: x.rec.ms / 1000, timeout: x.rec.kind === 'timeout' });
   }
+}
+const judgeAgg = {};
+for (const x of records) {
+  if (x.taskId !== 'writing-1' || !usable(x) || !inScope(x.base)) continue;
+  const j = judgePair(x); const a = (judgeAgg[x.rowKey] = judgeAgg[x.rowKey] || { claude: [], grok: [] });
+  if (j.claude !== null) a.claude.push(j.claude); if (j.grok !== null) a.grok.push(j.grok);
 }
 const stat = new Map();
 for (const [k, xs] of byCell) {
@@ -108,7 +132,7 @@ for (const [k, xs] of byCell) {
 const spreadOf = (taskId) => { const rs = [...stat].filter(([k, s]) => k.endsWith(`|${taskId}`) && s.n > 1).map(([, s]) => s.max - s.min); return rs.length ? median(rs) : null; };
 const interval = (s, spread) => (s.n > 1 ? [s.min, s.max] : spread === null ? [s.med, s.med] : [s.med - spread, s.med + spread]);
 const tiedSets = {};
-for (const t of [...OPEN, ...PROJECT]) {
+for (const t of [...OPEN, ...PROJECT, ...EXTRA]) {
   const col = [...rows.values()].map((r) => ({ r, s: stat.get(`${r.key}|${t.id}`) })).filter((x) => x.s);
   if (!col.length) continue;
   const spread = spreadOf(t.id), best = col.reduce((a, b) => (b.s.med > a.s.med ? b : a)), bi = interval(best.s, spread);
@@ -173,13 +197,16 @@ for (const t of OPEN) {
 }
 
 // ---------- output ----------
+// Categories that exist only in the demanding tier have their own columns, so they are left out of the short-tier block.
+const SHORT_CATS = CATEGORIES.filter((c) => !['web', 'writing', 'video'].includes(c.id));
 const columns = [
   ...OPEN.map((t) => ({ id: t.id, title: t.title, sub: t.sub })), { id: 'openAvg', title: '고난도 평균', sub: '네 과제' },
   ...PROJECT.map((t) => ({ id: t.id, title: t.title, sub: t.sub })),
-  ...CATEGORIES.map((c) => ({ id: `cat-${c.id}`, title: c.name.replace(/\(.*\)/, '') })), { id: 'shortAvg', title: '일반 평균' }, { id: 'shortSec', title: '응답 시간', sub: '일반 과제 중앙값' },
-  { id: 'cost', title: '정가 환산 비용', sub: '측정 전체' }, { id: 'timeouts', title: '시간 초과', sub: '건수/호출' },
+  ...EXTRA.map((t) => ({ id: t.id, title: t.title, sub: t.sub })),
+  ...SHORT_CATS.map((c) => ({ id: `cat-${c.id}`, title: c.name.replace(/\(.*\)/, '') })), { id: 'shortAvg', title: '일반 평균' }, { id: 'shortSec', title: '응답 시간', sub: '일반 과제 중앙값' },
+  { id: 'timeouts', title: '시간 초과', sub: '건수/호출' },
 ];
-const groups = [{ title: '고난도: 정답이 없는 과제 (점수 · 범위 · 횟수 · 걸린 시간)', span: OPEN.length + 1 }, { title: '고난도: 정답이 있는 과제', span: PROJECT.length }, { title: '일반 과제 33개 (분류별 점수)', span: CATEGORIES.length + 2 }, { title: '비용과 안정성', span: 2 }];
+const groups = [{ title: '고난도: 정답이 없는 과제 (점수 · 범위 · 횟수 · 걸린 시간)', span: OPEN.length + 1 }, { title: '고난도: 정답이 있는 과제', span: PROJECT.length }, { title: '웹 · 문서 · 동영상', span: EXTRA.length }, { title: '일반 과제 33개 (분류별 점수, 1회 측정)', span: SHORT_CATS.length + 2 }, { title: '안정성', span: 1 }];
 const extra = readJson(join(DATA, 'report-notes.json'), {});
 const report = {
   title: 'Grok · Claude 통합 성적표', generatedAt: new Date().toISOString(),
@@ -187,15 +214,16 @@ const report = {
   summary: extra.summary || [], columns, groups,
   rows: sorted.map((r) => ({ key: r.key, label: r.label, sub: `추론 강도 ${EFFORT[r.effort] || r.effort}`, provider: r.provider, cells: r.cells })),
   legend: '● 그 열의 최고점 · ○ 최고점과 측정 편차 안에서 같음(반복 측정의 점수 범위가 겹침). 고난도 점수는 반복 측정의 중앙값이고, 100점은 측정된 답안 가운데 가장 좋은 결과입니다(수요 예측은 이론상 최소 오차).',
-  criteria: [...criteria, ...(extra.criteria || [])], notes: extra.notes || [],
+  criteria: extra.criteria && extra.criteria.length ? extra.criteria : criteria, notes: extra.notes || [],
+  judges: Object.fromEntries(Object.entries(judgeAgg).map(([k, v]) => [k, { claude: v.claude.length ? r1(v.claude.reduce((a, b) => a + b, 0) / v.claude.length) : null, grok: v.grok.length ? r1(v.grok.reduce((a, b) => a + b, 0) / v.grok.length) : null, n: [v.claude.length, v.grok.length] }])),
   lines, spreads: Object.fromEntries(Object.entries(tiedSets).map(([k, v]) => [k, v.spread])),
 };
-writeFileSync(join(DATA, 'report.json'), JSON.stringify(report, null, 1));
+writeFileSync(join(DATA, APPENDIX ? 'report-appendix.json' : 'report.json'), JSON.stringify(report, null, 1));
 const cellMd = (x) => (x ? `${x.v}${x.mark === 'best' ? ' ●' : x.mark === 'tie' ? ' ○' : ''}${x.s ? ` (${x.s})` : ''}` : '-');
 const md = [`# ${report.title}`, '', `${report.scope}`, '', ...report.summary.map((s) => `- ${s}`), '',
   `| 모델 · 추론 강도 | ${columns.map((c) => c.title).join(' | ')} |`, `|---|${columns.map(() => '---').join('|')}|`,
   ...sorted.map((r) => `| ${name(r)} | ${columns.map((c) => cellMd(r.cells[c.id])).join(' | ')} |`), '', report.legend, '',
   '## 작업별 모델 선택 기준', '', '| 작업 종류 | 먼저 쓸 모델 | 대안 | 근거 |', '|---|---|---|---|', ...report.criteria.map((c) => `| ${c.work} | ${c.pick} | ${c.alt || '-'} | ${c.why} |`), '',
   '## 읽을 때의 주의점', '', ...report.notes.map((n) => `- ${n}`), ''].join('\n');
-writeFileSync(join(DATA, 'report.md'), md);
+writeFileSync(join(DATA, APPENDIX ? 'report-appendix.md' : 'report.md'), md);
 console.log(md);
